@@ -50,10 +50,12 @@ VkPipeline pipeline;
 VulkanBuffer vertex_buffer;
 VulkanBuffer index_buffer;
 
-Vector model_position = {0.0f, 0.0f, 5.0f};
+int indices_count = 0;
+
+Vector model_position = {0.0f, 0.0f, 3.0f}; //{0.0f, 0.0f, 5.0f};
 float model_rotation;
 Vector model_color = {0.5f, 1.0f, 0.7f };
-bool model_spin = true;
+bool model_spin = false;
 
 Matrix identity() {
 	Matrix result{};
@@ -270,12 +272,12 @@ void generateCylinderVertices(Vertex* vertices, int segments, float radius, floa
 void generateCylinderIndices(uint32_t* indices, int segments) {
     for (int i = 0; i < segments; ++i) {
         uint32_t base = i * 2;
-        indices[i * 6] = base;
+        indices[i * 6] = base + 1;
         indices[i * 6 + 1] = base + 2;  
-        indices[i * 6 + 2] = base + 1;
-        indices[i * 6 + 3] = base + 1;
+        indices[i * 6 + 2] = base;
+        indices[i * 6 + 3] = base + 3;
         indices[i * 6 + 4] = base + 2;
-        indices[i * 6 + 5] = base + 3;
+        indices[i * 6 + 5] = base + 1;
     }
 }
 
@@ -355,7 +357,7 @@ void initialize() {
 		//       so our vertex buffer contains a "list of triangles"
 		VkPipelineInputAssemblyStateCreateInfo assembly_state_info{
 			.sType = VK_STRUCTURE_TYPE_PIPELINE_INPUT_ASSEMBLY_STATE_CREATE_INFO,
-			.topology = VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST,
+			.topology = VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST,//VK_PRIMITIVE_TOPOLOGY_LINE_LIST VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST
 		};
 
 		// NOTE: Declare clockwise triangle order as front-facing
@@ -364,7 +366,7 @@ void initialize() {
 		VkPipelineRasterizationStateCreateInfo raster_info{
 			.sType = VK_STRUCTURE_TYPE_PIPELINE_RASTERIZATION_STATE_CREATE_INFO,
 			.polygonMode = VK_POLYGON_MODE_FILL,
-			.cullMode = VK_CULL_MODE_BACK_BIT,
+			.cullMode = VK_CULL_MODE_BACK_BIT, /* VK_CULL_MODE_NONE, VK_CULL_MODE_BACK_BIT */
 			.frontFace = VK_FRONT_FACE_CLOCKWISE,
 			.lineWidth = 1.0f,
 		};
@@ -484,13 +486,43 @@ void initialize() {
 	//  |   `--,   |
 	//  |       \  |
 	// (v3)------(v2)
-	int segments = 16;
+
+	/* Vertex vertices[] = {
+		{{-1.0f, -1.0f, 0.0f}},
+		{{1.0f, -1.0f, 0.0f}},
+		{{1.0f, 1.0f, 0.0f}},
+		{{-1.0f, 1.0f, 0.0f}},
+	};
+
+	uint32_t indices[] = { 0, 1, 2, 2, 3, 0 };
+	 */
+	int segments = 30;
 	Vertex vertices[(segments + 1) * 2];
 	uint32_t indices[segments * 6];
+	//uint32_t indices[] = { 0, 1, 2, 2, 3, 1 };
 	
 	
 	generateCylinderVertices(vertices, segments, 0.5f, 2.0f);
 	generateCylinderIndices(indices, segments);
+
+
+	if(sizeof(indices))
+	indices_count = sizeof(indices) / sizeof(indices[0]);
+
+
+	/* std::cout << "Vertices generated:\n";
+		for (int i = 0; i < (segments + 1) * 2; i++) {
+			std::cout << "V" << i << ": (" << vertices[i].position.x << ", " 
+					<< vertices[i].position.y << ", " << vertices[i].position.z << ")\n";
+		}
+
+		std::cout << "=== "<< indices_count<< " INDICES ===" << std::endl;
+	for (int i = 0; i < segments; i++) {
+		std::cout << "Segment " << i << ": " 
+				<< indices[i*6] << "," << indices[i*6+1] << "," << indices[i*6+2] << " | "
+				<< indices[i*6+3] << "," << indices[i*6+4] << "," << indices[i*6+5] << std::endl;
+	} */
+
 	
 
 	vertex_buffer = createBuffer(sizeof(vertices), vertices,
@@ -515,6 +547,7 @@ void shutdown() {
 
 void update(double time) {
 	ImGui::Begin("Controls:");
+	ImGui::ColorEdit3("Model Color", reinterpret_cast<float*>(&model_color));
 	ImGui::InputFloat3("Translation", reinterpret_cast<float*>(&model_position));
 	ImGui::SliderFloat("Rotation", &model_rotation, 0.0f, 2.0f * M_PI);
 	ImGui::Checkbox("Spin?", &model_spin);
@@ -597,7 +630,7 @@ void render(VkCommandBuffer cmd, VkFramebuffer framebuffer) {
 		                   0, sizeof(ShaderConstants), &constants);
 
 		// NOTE: Draw 6 indices (3 vertices * 2 triangles), 1 group, no offsets
-		vkCmdDrawIndexed(cmd, 6, 1, 0, 0, 0);
+		vkCmdDrawIndexed(cmd, indices_count, 1, 0, 0, 0);
 	}
 
 	vkCmdEndRenderPass(cmd);
