@@ -10,7 +10,7 @@ target_include_directories(${PROJECT_NAME} PUBLIC
     $<INSTALL_INTERFACE:include>
 )
 
-if(LINUX)
+if(UNIX AND NOT APPLE)
 	target_compile_options(${PROJECT_NAME} PRIVATE -Wall -Wextra -Wno-missing-field-initializers)
 elseif(MSVC)
 	target_compile_options(${PROJECT_NAME} PRIVATE /W4)
@@ -30,7 +30,7 @@ FetchContent_Declare(
 FetchContent_Declare(
 	vk-bootstrap
 	GIT_REPOSITORY https://github.com/charles-lunarg/vk-bootstrap
-	GIT_TAG v1.4.321
+	GIT_TAG v0.7
 )
 
 FetchContent_Declare(
