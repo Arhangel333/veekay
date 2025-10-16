@@ -256,6 +256,29 @@ void destroyBuffer(const VulkanBuffer& buffer) {
 	vkDestroyBuffer(device, buffer.buffer, nullptr);
 }
 
+void generateCylinderVertices(Vertex* vertices, int segments, float radius, float height) {
+    for (int i = 0; i <= segments; ++i) {
+        float angle = 2.0f * M_PI * i / segments;
+        float x = radius * cosf(angle);
+        float z = radius * sinf(angle);
+        
+        vertices[i * 2] = Vertex{{x, height/2, z}};      // НИЗ
+        vertices[i * 2 + 1] = Vertex{{x, -height/2, z}}; // ВЕРХ
+    }
+}
+
+void generateCylinderIndices(uint32_t* indices, int segments) {
+    for (int i = 0; i < segments; ++i) {
+        uint32_t base = i * 2;
+        indices[i * 6] = base;
+        indices[i * 6 + 1] = base + 2;  
+        indices[i * 6 + 2] = base + 1;
+        indices[i * 6 + 3] = base + 1;
+        indices[i * 6 + 4] = base + 2;
+        indices[i * 6 + 5] = base + 3;
+    }
+}
+
 void initialize() {
 	VkDevice& device = veekay::app.vk_device;
 	VkPhysicalDevice& physical_device = veekay::app.vk_physical_device;
@@ -461,14 +484,14 @@ void initialize() {
 	//  |   `--,   |
 	//  |       \  |
 	// (v3)------(v2)
-	Vertex vertices[] = {
-		{{-1.0f, -1.0f, 0.0f}},
-		{{1.0f, -1.0f, 0.0f}},
-		{{1.0f, 1.0f, 0.0f}},
-		{{-1.0f, 1.0f, 0.0f}},
-	};
-
-	uint32_t indices[] = { 0, 1, 2, 2, 3, 0 };
+	int segments = 16;
+	Vertex vertices[(segments + 1) * 2];
+	uint32_t indices[segments * 6];
+	
+	
+	generateCylinderVertices(vertices, segments, 0.5f, 2.0f);
+	generateCylinderIndices(indices, segments);
+	
 
 	vertex_buffer = createBuffer(sizeof(vertices), vertices,
 	                             VK_BUFFER_USAGE_VERTEX_BUFFER_BIT);
