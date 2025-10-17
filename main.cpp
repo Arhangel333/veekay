@@ -64,6 +64,7 @@ namespace
 	// float model_pos;		//
 	float animationSpeed = 1.0f;   // скорость движения по траектории
 	float trajectoryRadius = 1.0f; // радиус траектории
+	float newangle = 0.0f;
 
 	Vector model_color = {0.5f, 1.0f, 0.7f};
 	bool model_spin = false;
@@ -611,7 +612,7 @@ namespace
 
 		if (obj_rotation)
 		{
-			float angle = float(time) * animationSpeed;
+			float angle = newangle++ * animationSpeed * 0.1f;
 			//angle = fmodf(angle, 2.0f * M_PI);
 			float center_x = 0.0f; // центр окружности по X
 			float center_z = 5.0f; // центр окружности по Z
