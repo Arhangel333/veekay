@@ -55,12 +55,16 @@ namespace
 	// NOTE: Declare buffers and other variables here
 	VulkanBuffer vertex_buffer;
 	VulkanBuffer index_buffer;
-	bool ortografics = 0;	//1 - ортографическая проекция; 0 - обычная
-
+	bool ortografics = 0;  // 1 - ортографическая проекция; 0 - обычная
+	bool obj_rotation = 0; // rotation if == 1
 	int indices_count = 0;
 
-	Vector model_position = {0.0f, 0.0f, 3.0f}; //{0.0f, 0.0f, 5.0f};
-	float model_rotation;
+	Vector model_position = {0.0f, 0.0f, 5.0f}; //{0.0f, 0.0f, 5.0f};
+	float model_rotation;						// вращение вокруг оси У
+	// float model_pos;		//
+	float animationSpeed = 1.0f;   // скорость движения по траектории
+	float trajectoryRadius = 1.0f; // радиус траектории
+
 	Vector model_color = {0.5f, 1.0f, 0.7f};
 	bool model_spin = false;
 
@@ -590,9 +594,12 @@ namespace
 		ImGui::Begin("Controls:");
 		ImGui::ColorEdit3("Model Color", reinterpret_cast<float *>(&model_color));
 		ImGui::InputFloat3("Translation", reinterpret_cast<float *>(&model_position));
+		ImGui::SliderFloat("Trajectory Radius", &trajectoryRadius, 0.1f, 5.0f);
+		ImGui::SliderFloat("Animation Speed", &animationSpeed, 0.1f, 3.0f);
 		ImGui::SliderFloat("Rotation", &model_rotation, 0.0f, 2.0f * M_PI);
 		ImGui::Checkbox("Spin", &model_spin);
 		ImGui::Checkbox("Ort View", &ortografics);
+		ImGui::Checkbox("Tracing", &obj_rotation);
 		// TODO: Your GUI stuff here
 		ImGui::End();
 
@@ -602,7 +609,19 @@ namespace
 			model_rotation = float(time);
 		}
 
+		if (obj_rotation)
+		{
+			float angle = float(time) * animationSpeed;
+			//angle = fmodf(angle, 2.0f * M_PI);
+			float center_x = 0.0f; // центр окружности по X
+			float center_z = 5.0f; // центр окружности по Z
+
+			model_position.x = center_x + trajectoryRadius * cosf(angle);
+			model_position.z = center_z + trajectoryRadius * sinf(angle);
+		}
+
 		model_rotation = fmodf(model_rotation, 2.0f * M_PI);
+		// model_pos = fmodf(model_pos, 2.0f * M_PI);
 	}
 
 	void render(VkCommandBuffer cmd, VkFramebuffer framebuffer)
@@ -652,33 +671,39 @@ namespace
 
 			// NOTE: Use our quad index buffer
 			vkCmdBindIndexBuffer(cmd, index_buffer.buffer, offset, VK_INDEX_TYPE_UINT32);
-			
+
 			// NOTE: Variables like model_XXX were declared globally
 			ShaderConstants constants;
+			Matrix transform = multiply(
+
+				rotation({0.0f, 1.0f, 0.0f}, model_rotation), // вращение вокруг Y
+				translation(model_position)					  // перемещение
+			);
+
+			constants = ShaderConstants{
+				.projection = {},
+
+				.transform = transform, /* multiply(rotation({0.0f, 1.0f, 0.0f}, model_rotation),
+									  translation(model_position)), */
+				.color = model_color,
+			};
 			if (!ortografics)
-			{
-				// Перспективная проекция
-				constants = ShaderConstants{
-					.projection = projection(
-						camera_fov,
-						float(veekay::app.window_width) / float(veekay::app.window_height),
-						camera_near_plane, camera_far_plane),
-					.transform = multiply(rotation({0.0f, 1.0f, 0.0f}, model_rotation),
-										  translation(model_position)),
-					.color = model_color,
-				};
+			{ // Перспективная проекция
+				constants.projection = projection(camera_fov, float(veekay::app.window_width) / float(veekay::app.window_height), camera_near_plane, camera_far_plane);
 			}
 			else
-			{
-				// Ортографическая проекция
-				constants = ShaderConstants{
-					.projection = orthographicProjection(
-						float(veekay::app.window_width) / float(veekay::app.window_height)),
-					.transform = multiply(rotation({0.0f, 1.0f, 0.0f}, model_rotation),
-										  translation(model_position)),
-					.color = model_color,
-				};
+			{ // Ортографическая проекция
+				constants.projection = orthographicProjection(float(veekay::app.window_width) / float(veekay::app.window_height));
 			}
+
+			/* // Ортографическая проекция
+			constants = ShaderConstants{
+				.projection = orthographicProjection(
+					float(veekay::app.window_width) / float(veekay::app.window_height)),
+				.transform = multiply(rotation({0.0f, 1.0f, 0.0f}, model_rotation),
+									  translation(model_position)),
+				.color = model_color,
+			}; */
 
 			/* 	ShaderConstants constants{
 					.projection = projection(
