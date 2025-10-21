@@ -50,9 +50,12 @@ namespace
 
     struct Object
     {
-        
+        Vector model_position = {0.0f, 0.0f, 5.0f}; //{0.0f, 0.0f, 5.0f};
+        Vector model_color = {0.5f, 1.0f, 0.7f};
+        float model_rotation;						// вращение вокруг оси У
+        bool model_spin = false;
     };
-    
+    std::vector<Object> obj;
 	VkShaderModule vertex_shader_module;
 	VkShaderModule fragment_shader_module;
 	VkPipelineLayout pipeline_layout;
@@ -61,19 +64,28 @@ namespace
 	// NOTE: Declare buffers and other variables here
 	VulkanBuffer vertex_buffer;
 	VulkanBuffer index_buffer;
+
+    //глобальные переменные не связные с отдельными объектами
 	bool ortografics = 0;  // 1 - ортографическая проекция; 0 - обычная
 	bool obj_rotation = 0; // rotation if == 1
 	int indices_count = 0;
 
+	
+
+	//глобальные переменные связные с отдельными объектами
+
+    //у каждой фигуры есть:
 	Vector model_position = {0.0f, 0.0f, 5.0f}; //{0.0f, 0.0f, 5.0f};
 	float model_rotation;						// вращение вокруг оси У
-	// float model_pos;		//
-	float animationSpeed = 1.0f;   // скорость движения по траектории
+    Vector model_color = {0.5f, 1.0f, 0.7f};
+	bool model_spin = false;
+
+    //не у каждой фигуры есть:
+    float animationSpeed = 1.0f;   // скорость движения по траектории
 	float trajectoryRadius = 1.0f; // радиус траектории
 	float newangle = 0.0f;
 
-	Vector model_color = {0.5f, 1.0f, 0.7f};
-	bool model_spin = false;
+	
 
 	Matrix identity()
 	{

@@ -407,7 +407,8 @@ namespace
 
 		if (obj_rotation)
 		{
-			float angle = newangle++ * animationSpeed * 0.1f;
+			float angle = newangle * 0.1f;
+			newangle += animationSpeed;
 			//angle = fmodf(angle, 2.0f * M_PI);
 			float center_x = 0.0f; // центр окружности по X
 			float center_z = 5.0f; // центр окружности по Z
