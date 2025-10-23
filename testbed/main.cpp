@@ -1,7 +1,6 @@
 
 #include "objects.hpp"
 
-	
 namespace
 {
 	// NOTE: Loads shader byte code from file
@@ -133,8 +132,6 @@ namespace
 		vkDestroyBuffer(device, buffer.buffer, nullptr);
 	}
 
-	
-
 	void initialize()
 	{
 		VkDevice &device = veekay::app.vk_device;
@@ -210,7 +207,7 @@ namespace
 				.pVertexAttributeDescriptions = attributes,
 			};
 
-			// NOTE: Every three vertices make up a triangle,
+			// NOTE: Every three cylindervertices make up a triangle,
 			//       so our vertex buffer contains a "list of triangles"
 			VkPipelineInputAssemblyStateCreateInfo assembly_state_info{
 				.sType = VK_STRUCTURE_TYPE_PIPELINE_INPUT_ASSEMBLY_STATE_CREATE_INFO,
@@ -335,7 +332,7 @@ namespace
 			}
 		}
 
-		// TODO: You define model vertices and create buffers here
+		// TODO: You define model cylindervertices and create buffers here
 		// TODO: Index buffer has to be created here too
 		// NOTE: Look for createBuffer function
 
@@ -345,30 +342,89 @@ namespace
 		//  |       \  |
 		// (v3)------(v2)
 
-		/* Vertex vertices[] = {
+		/* Vertex cylindervertices[] = {
 			{{-1.0f, -1.0f, 0.0f}},
 			{{1.0f, -1.0f, 0.0f}},
 			{{1.0f, 1.0f, 0.0f}},
 			{{-1.0f, 1.0f, 0.0f}},
 		};
 
-		uint32_t indices[] = { 0, 1, 2, 2, 3, 0 };
+		uint32_t cylinderindices[] = { 0, 1, 2, 2, 3, 0 };
 		 */
-		int segments = 30;
-		Vertex vertices[(segments + 1) * 2];
-		uint32_t indices[segments * 6];
 
-		generateCylinderVertices(vertices, segments, 0.5f, 2.0f);
-		generateCylinderIndices(indices, segments);
+		// cylinder
+		int cylindersegments = 30;
+		Vertex cylindervertices[(cylindersegments + 1) * 2];
+		uint32_t cylinderindices[cylindersegments * 6];
 
-		if (sizeof(indices))
-			indices_count = sizeof(indices) / sizeof(indices[0]);
+		generateCylinderVertices(cylindervertices, cylindersegments, 0.5f, 2.0f);
+		generateCylinderIndices(cylinderindices, cylindersegments);
 
-		vertex_buffer = createBuffer(sizeof(vertices), vertices,
+		if (sizeof(cylinderindices))
+			cylinder_indices_count = sizeof(cylinderindices) / sizeof(cylinderindices[0]);
+
+		vertex_buffer = createBuffer(sizeof(cylindervertices), cylindervertices,
 									 VK_BUFFER_USAGE_VERTEX_BUFFER_BIT);
 
-		index_buffer = createBuffer(sizeof(indices), indices,
+		index_buffer = createBuffer(sizeof(cylinderindices), cylinderindices,
 									VK_BUFFER_USAGE_INDEX_BUFFER_BIT);
+
+		// cube
+		int cubesegments = 4;
+		Vertex cubevertices[(cubesegments + 1) * 2];
+		uint32_t cubeindices[cubesegments * 6 + (cubesegments - 2) * 2 * 3];
+
+		generateCylinderVertices(cubevertices, cubesegments, 0.25f, 0.5f);
+		generateCubeIndices(cubeindices, cubesegments);
+		if (sizeof(cubeindices))
+			cube_indices_count = sizeof(cubeindices) / sizeof(cubeindices[0]);
+
+		cube_vertex_buffer = createBuffer(sizeof(cubevertices), cubevertices,
+										  VK_BUFFER_USAGE_VERTEX_BUFFER_BIT);
+
+		cube_index_buffer = createBuffer(sizeof(cubeindices), cubeindices,
+										 VK_BUFFER_USAGE_INDEX_BUFFER_BIT);
+
+		size_t vertex_size = (sizeof(cylindervertices) + sizeof(cubevertices)) / sizeof(cylindervertices[0]);
+		Vertex allvertexes[vertex_size];
+		for (size_t i = 0, n = 0; i < vertex_size; i++)
+		{
+			if (i < sizeof(cylindervertices) / sizeof(cylindervertices[0]))
+			{
+				allvertexes[i] = cylindervertices[i];
+				n++;
+			}
+			else
+			{
+				allvertexes[i] = cubevertices[i - n];
+			}
+		}
+
+		// together objects
+		size_t cylinder_idx_size = sizeof(cylinderindices) / sizeof(cylinderindices[0]);
+		size_t cube_idx_size = sizeof(cubeindices) / sizeof(cubeindices[0]);
+		size_t index_size = cylinder_idx_size + cube_idx_size;
+
+		uint32_t result_idx[index_size];
+
+		for (size_t i = 0, n = 0; i < index_size; i++)
+		{
+			if (i < cylinder_idx_size)
+			{
+				result_idx[i] = cylinderindices[i];
+				n++;
+			}
+			else
+			{
+				result_idx[i] = cubeindices[i - n] + sizeof(cylindervertices) / sizeof(cylindervertices[0]);
+			}
+		}
+
+		/* all_vertex_buffer = createBuffer(sizeof(allvertexes), allvertexes,
+									 VK_BUFFER_USAGE_VERTEX_BUFFER_BIT);
+
+		all_index_buffer = createBuffer(sizeof(result_idx), result_idx,
+									VK_BUFFER_USAGE_INDEX_BUFFER_BIT); */
 	}
 
 	void shutdown()
@@ -378,6 +434,8 @@ namespace
 		// NOTE: Destroy resources here, do not cause leaks in your program!
 		destroyBuffer(index_buffer);
 		destroyBuffer(vertex_buffer);
+		destroyBuffer(cube_index_buffer);
+		destroyBuffer(cube_vertex_buffer);
 
 		vkDestroyPipeline(device, pipeline, nullptr);
 		vkDestroyPipelineLayout(device, pipeline_layout, nullptr);
@@ -389,35 +447,61 @@ namespace
 	{
 		ImGui::Begin("Controls:");
 		ImGui::ColorEdit3("Model Color", reinterpret_cast<float *>(&model_color));
-		ImGui::InputFloat3("Translation", reinterpret_cast<float *>(&model_position));
-		ImGui::SliderFloat("Trajectory Radius", &trajectoryRadius, 0.1f, 5.0f);
-		ImGui::SliderFloat("Animation Speed", &animationSpeed, 0.1f, 3.0f);
-		ImGui::SliderFloat("Rotation", &model_rotation, 0.0f, 2.0f * M_PI);
-		ImGui::Checkbox("Spin", &model_spin);
+		ImGui::InputFloat3("Translation", reinterpret_cast<float *>(&cilinder.model_position));
+		ImGui::SliderFloat("Cilinder Trajectory Radius", &trajectoryRadius, 0.1f, 5.0f);
+		ImGui::SliderFloat("Cilinder Animation Speed", &animationSpeed, 0.1f, 3.0f);
+		ImGui::SliderFloat("Rotation", &cilinder.model_rotation, 0.0f, 2.0f * M_PI);
+		ImGui::Checkbox("Spin", &cilinder.model_spin);
 		ImGui::Checkbox("Ort View", &ortografics);
 		ImGui::Checkbox("Tracing", &obj_rotation);
+		ImGui::Checkbox("Add satellite", &satellite);
+		if (satellite)
+		{
+			ImGui::SliderFloat("Satellite Trajectory Radius", &cube_trajectoryRadius, 0.1f, 5.0f);
+			ImGui::SliderFloat("Satellite Animation Speed", &cube_animationSpeed, 0.0f, 3.0f);
+			ImGui::Checkbox("Satellite Spin", &cube.model_spin);
+		}
+		
+		
 		// TODO: Your GUI stuff here
 		ImGui::End();
 
 		// NOTE: Animation code and other runtime variable updates go here
-		if (model_spin)
+		if (cilinder.model_spin)
 		{
-			model_rotation = float(time);
+			cilinder.model_rotation = float(time);
 		}
 
 		if (obj_rotation)
 		{
 			float angle = newangle * 0.1f;
 			newangle += animationSpeed;
-			//angle = fmodf(angle, 2.0f * M_PI);
+			// angle = fmodf(angle, 2.0f * M_PI);
 			float center_x = 0.0f; // центр окружности по X
 			float center_z = 5.0f; // центр окружности по Z
 
-			model_position.x = center_x + trajectoryRadius * cosf(angle);
-			model_position.z = center_z + trajectoryRadius * sinf(angle);
+			cilinder.model_position.x = center_x + trajectoryRadius * cosf(angle);
+			cilinder.model_position.z = center_z + trajectoryRadius * sinf(angle);
+		}
+		if (satellite)
+		{
+			float angle = cube_newangle * 0.1f;
+			cube_newangle += cube_animationSpeed;
+			float center_x = cilinder.model_position.x; // центр окружности по X
+			float center_z = cilinder.model_position.z; // центр окружности по Z
+
+			cube.model_position.x = center_x + cube_trajectoryRadius * cosf(angle);
+			cube.model_position.z = center_z + cube_trajectoryRadius * sinf(angle);
+			if (cube.model_spin)
+		{
+			cube.model_rotation = float(time);
+		}
+		
+		}else{
+			cube.model_position = {4.0f, 0.0f, 0.0f};
 		}
 
-		model_rotation = fmodf(model_rotation, 2.0f * M_PI);
+		cilinder.model_rotation = fmodf(cilinder.model_rotation, 2.0f * M_PI);
 		// model_pos = fmodf(model_pos, 2.0f * M_PI);
 	}
 
@@ -458,9 +542,10 @@ namespace
 
 		// TODO: Vulkan rendering code here
 		// NOTE: ShaderConstant updates, vkCmdXXX expected to be here
-		{
-			// NOTE: Use our new shiny graphics pipeline
+		// NOTE: Use our new shiny graphics pipeline
 			vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline);
+		{
+			
 
 			// NOTE: Use our quad vertex buffer
 			VkDeviceSize offset = 0;
@@ -473,15 +558,14 @@ namespace
 			ShaderConstants constants;
 			Matrix transform = multiply(
 
-				rotation({0.0f, 1.0f, 0.0f}, model_rotation), // вращение вокруг Y
-				translation(model_position)					  // перемещение
+				rotation({0.0f, 1.0f, 0.0f}, cilinder.model_rotation), // вращение вокруг Y
+				translation(cilinder.model_position)		  // перемещение
 			);
 
 			constants = ShaderConstants{
 				.projection = {},
 
-				.transform = transform, /* multiply(rotation({0.0f, 1.0f, 0.0f}, model_rotation),
-									  translation(model_position)), */
+				.transform = transform,
 				.color = model_color,
 			};
 			if (!ortografics)
@@ -493,34 +577,47 @@ namespace
 				constants.projection = orthographicProjection(float(veekay::app.window_width) / float(veekay::app.window_height));
 			}
 
-			/* // Ортографическая проекция
-			constants = ShaderConstants{
-				.projection = orthographicProjection(
-					float(veekay::app.window_width) / float(veekay::app.window_height)),
-				.transform = multiply(rotation({0.0f, 1.0f, 0.0f}, model_rotation),
-									  translation(model_position)),
-				.color = model_color,
-			}; */
-
-			/* 	ShaderConstants constants{
-					.projection = projection(
-						camera_fov,
-						float(veekay::app.window_width) / float(veekay::app.window_height),
-						camera_near_plane, camera_far_plane),
-
-					.transform = multiply(rotation({0.0f, 1.0f, 0.0f}, model_rotation),
-										  translation(model_position)),
-
-					.color = model_color,
-				}; */
-
 			// NOTE: Update constant memory with new shader constants
 			vkCmdPushConstants(cmd, pipeline_layout,
 							   VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT,
 							   0, sizeof(ShaderConstants), &constants);
 
-			// NOTE: Draw 6 indices (3 vertices * 2 triangles), 1 group, no offsets
-			vkCmdDrawIndexed(cmd, indices_count, 1, 0, 0, 0);
+			// NOTE: Draw 6 cylinderindices (3 cylindervertices * 2 triangles), 1 group, no offsets
+			vkCmdDrawIndexed(cmd, cylinder_indices_count, 1, 0, 0, 0);
+		}
+		{
+			VkDeviceSize offset = 0;
+
+			vkCmdBindVertexBuffers(cmd, 0, 1, &cube_vertex_buffer.buffer, &offset);
+			vkCmdBindIndexBuffer(cmd, cube_index_buffer.buffer, 0, VK_INDEX_TYPE_UINT32);
+
+			ShaderConstants constants_cube;
+			Matrix transform = multiply(
+
+				rotation({1.0f, 0.0f, 0.0f}, cube.model_rotation), // вращение вокруг Y
+				translation(cube.model_position)		  // перемещение
+			); // Примерная позиция для куба
+
+			constants_cube = ShaderConstants{
+				.projection = {},
+				.transform = transform,
+				.color = {1.0f, 0.0f, 0.0f}, // Красный цвет для куба
+			};
+
+			if (!ortografics)
+			{ // Перспективная проекция
+				constants_cube.projection = projection(camera_fov, float(veekay::app.window_width) / float(veekay::app.window_height), camera_near_plane, camera_far_plane);
+			}
+			else
+			{ // Ортографическая проекция
+				constants_cube.projection = orthographicProjection(float(veekay::app.window_width) / float(veekay::app.window_height));
+			}
+
+			vkCmdPushConstants(cmd, pipeline_layout,
+							   VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT,
+							   0, sizeof(ShaderConstants), &constants_cube);
+
+			vkCmdDrawIndexed(cmd, cube_indices_count, 1, 0, 0, 0);
 		}
 
 		vkCmdEndRenderPass(cmd);

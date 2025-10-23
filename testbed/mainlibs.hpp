@@ -1,5 +1,6 @@
 #include <cstdint>
 #include <climits>
+#include <cstring>
 #include <vector>
 #include <iostream>
 #include <fstream>
@@ -30,6 +31,13 @@ namespace
 	struct Vertex
 	{
 		Vector position;
+		
+		Vertex& operator=(const Vector& vec) {
+        position.x = vec.x;
+        position.y = vec.y;
+        position.z = vec.z;
+        return *this;  // ⚠️ ВАЖНО: возвращаем ссылку на себя!
+    	}
 		// NOTE: You can add more attributes
 	};
 
@@ -50,7 +58,7 @@ namespace
 
     struct Object
     {
-        Vector model_position = {0.0f, 0.0f, 5.0f}; //{0.0f, 0.0f, 5.0f};
+        Vector model_position = {0.0f, 0.0f, 5.0f}; //{0.0f, 0.0f, 5.0f}; чтобы попадал в кадр
         Vector model_color = {0.5f, 1.0f, 0.7f};
         float model_rotation;						// вращение вокруг оси У
         bool model_spin = false;
@@ -64,27 +72,47 @@ namespace
 	// NOTE: Declare buffers and other variables here
 	VulkanBuffer vertex_buffer;
 	VulkanBuffer index_buffer;
+	VulkanBuffer cube_vertex_buffer;
+	VulkanBuffer cube_index_buffer;
+	VulkanBuffer all_vertex_buffer;
+	VulkanBuffer all_index_buffer;
 
     //глобальные переменные не связные с отдельными объектами
 	bool ortografics = 0;  // 1 - ортографическая проекция; 0 - обычная
 	bool obj_rotation = 0; // rotation if == 1
-	int indices_count = 0;
+	bool satellite = 0; //Куб спутник летает вокруг если 1
+	//int indices_count = 0;
+	uint32_t cylinder_indices_count = 0;
+    uint32_t cube_indices_count = 0;
 
+	Object cilinder{
+		.model_position = {2.0f, 0.0f, 5.0f},
+        .model_color = {0.5f, 1.0f, 0.7f},
+        .model_spin = false,
+	};
 	
+	Object cube{
+		.model_position = {4.0f, 0.0f, 0.0f}, //чтобы в начале было не видно
+        .model_color = {0.5f, 0.7f, 0.7f},
+        .model_rotation = 0.0f,				// вращение вокруг оси У
+        .model_spin = false,
+	};
 
 	//глобальные переменные связные с отдельными объектами
 
     //у каждой фигуры есть:
-	Vector model_position = {0.0f, 0.0f, 5.0f}; //{0.0f, 0.0f, 5.0f};
+	//Vector model_position = {0.0f, 0.0f, 5.0f}; //{0.0f, 0.0f, 5.0f};
 	float model_rotation;						// вращение вокруг оси У
     Vector model_color = {0.5f, 1.0f, 0.7f};
 	bool model_spin = false;
 
     //не у каждой фигуры есть:
     float animationSpeed = 1.0f;   // скорость движения по траектории
+	float cube_animationSpeed = 1.0f;   // скорость движения по траектории
 	float trajectoryRadius = 1.0f; // радиус траектории
+	float cube_trajectoryRadius = 1.0f; // радиус траектории
 	float newangle = 0.0f;
-
+	float cube_newangle = 0.0f;
 	
 
 	Matrix identity()
