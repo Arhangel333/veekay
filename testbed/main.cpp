@@ -1,4 +1,3 @@
-
 #include "objects.hpp"
 
 namespace
@@ -187,15 +186,6 @@ namespace
 					.format = VK_FORMAT_R32G32B32_SFLOAT, // NOTE: 3-component vector of floats
 					.offset = offsetof(Vertex, position), // NOTE: Offset of "position" field in a Vertex struct
 				},
-			// NOTE: If you want more attributes per vertex, declare them here
-#if 0
-			{
-				.location = 1, // NOTE: Second attribute
-				.binding = 0,
-				.format = VK_FORMAT_XXX,
-				.offset = offset(Vertex, your_attribute),
-			},
-#endif
 			};
 
 			// NOTE: Bring
@@ -211,7 +201,7 @@ namespace
 			//       so our vertex buffer contains a "list of triangles"
 			VkPipelineInputAssemblyStateCreateInfo assembly_state_info{
 				.sType = VK_STRUCTURE_TYPE_PIPELINE_INPUT_ASSEMBLY_STATE_CREATE_INFO,
-				.topology = VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST, // VK_PRIMITIVE_TOPOLOGY_LINE_LIST VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST
+				.topology = VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST,
 			};
 
 			// NOTE: Declare clockwise triangle order as front-facing
@@ -220,7 +210,7 @@ namespace
 			VkPipelineRasterizationStateCreateInfo raster_info{
 				.sType = VK_STRUCTURE_TYPE_PIPELINE_RASTERIZATION_STATE_CREATE_INFO,
 				.polygonMode = VK_POLYGON_MODE_FILL,
-				.cullMode = VK_CULL_MODE_BACK_BIT, /* VK_CULL_MODE_NONE, VK_CULL_MODE_BACK_BIT */
+				.cullMode = VK_CULL_MODE_BACK_BIT,
 				.frontFace = VK_FRONT_FACE_CLOCKWISE,
 				.lineWidth = 1.0f,
 			};
@@ -250,10 +240,8 @@ namespace
 			// NOTE: Let rasterizer draw on the entire window
 			VkPipelineViewportStateCreateInfo viewport_info{
 				.sType = VK_STRUCTURE_TYPE_PIPELINE_VIEWPORT_STATE_CREATE_INFO,
-
 				.viewportCount = 1,
 				.pViewports = &viewport,
-
 				.scissorCount = 1,
 				.pScissors = &scissor,
 			};
@@ -277,12 +265,11 @@ namespace
 			// NOTE: Let rasterizer just copy resulting pixels onto a buffer, don't blend
 			VkPipelineColorBlendStateCreateInfo blend_info{
 				.sType = VK_STRUCTURE_TYPE_PIPELINE_COLOR_BLEND_STATE_CREATE_INFO,
-
 				.logicOpEnable = false,
 				.logicOp = VK_LOGIC_OP_COPY,
-
 				.attachmentCount = 1,
-				.pAttachments = &attachment_info};
+				.pAttachments = &attachment_info
+			};
 
 			// NOTE: Declare constant memory region visible to vertex and fragment shaders
 			VkPushConstantRange push_constants{
@@ -299,14 +286,14 @@ namespace
 			};
 
 			// NOTE: Create pipeline layout
-			if (vkCreatePipelineLayout(device, &layout_info,
-									   nullptr, &pipeline_layout) != VK_SUCCESS)
+			if (vkCreatePipelineLayout(device, &layout_info, nullptr, &pipeline_layout) != VK_SUCCESS)
 			{
 				std::cerr << "Failed to create Vulkan pipeline layout\n";
 				veekay::app.running = false;
 				return;
 			}
 
+			// 1. Сначала создаем основной пайплайн (fill)
 			VkGraphicsPipelineCreateInfo info{
 				.sType = VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO,
 				.stageCount = 2,
@@ -322,38 +309,49 @@ namespace
 				.renderPass = veekay::app.vk_render_pass,
 			};
 
-			// NOTE: Create graphics pipeline
-			if (vkCreateGraphicsPipelines(device, nullptr,
-										  1, &info, nullptr, &pipeline) != VK_SUCCESS)
+			if (vkCreateGraphicsPipelines(device, nullptr, 1, &info, nullptr, &pipeline) != VK_SUCCESS)
 			{
 				std::cerr << "Failed to create Vulkan pipeline\n";
 				veekay::app.running = false;
 				return;
 			}
+
+			// 2. Затем создаем проволочный пайплайн
+			VkPipelineRasterizationStateCreateInfo wireframe_raster_info{
+				.sType = VK_STRUCTURE_TYPE_PIPELINE_RASTERIZATION_STATE_CREATE_INFO,
+				.polygonMode = VK_POLYGON_MODE_LINE,
+				.cullMode = VK_CULL_MODE_NONE,
+				.frontFace = VK_FRONT_FACE_CLOCKWISE,
+				.lineWidth = 1.0f,
+			};
+
+			VkGraphicsPipelineCreateInfo wireframe_info{
+				.sType = VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO,
+				.stageCount = 2,
+				.pStages = stage_infos,
+				.pVertexInputState = &input_state_info,
+				.pInputAssemblyState = &assembly_state_info,
+				.pViewportState = &viewport_info,
+				.pRasterizationState = &wireframe_raster_info,
+				.pMultisampleState = &sample_info,
+				.pDepthStencilState = &depth_info,
+				.pColorBlendState = &blend_info,
+				.layout = pipeline_layout,
+				.renderPass = veekay::app.vk_render_pass,
+			};
+
+			if (vkCreateGraphicsPipelines(device, nullptr, 1, &wireframe_info, nullptr, &wireframe_pipeline) != VK_SUCCESS)
+			{
+				std::cerr << "Failed to create Vulkan wireframe pipeline\n";
+				veekay::app.running = false;
+				return;
+			}
+
+			std::cout << "Both pipelines created successfully" << std::endl;
 		}
 
-		// TODO: You define model cylindervertices and create buffers here
-		// TODO: Index buffer has to be created here too
-		// NOTE: Look for createBuffer function
-
-		// (v0)------(v1)
-		//  |  \       |
-		//  |   `--,   |
-		//  |       \  |
-		// (v3)------(v2)
-
-		/* Vertex cylindervertices[] = {
-			{{-1.0f, -1.0f, 0.0f}},
-			{{1.0f, -1.0f, 0.0f}},
-			{{1.0f, 1.0f, 0.0f}},
-			{{-1.0f, 1.0f, 0.0f}},
-		};
-
-		uint32_t cylinderindices[] = { 0, 1, 2, 2, 3, 0 };
-		 */
-
 		// cylinder
-		int cylindersegments = 30;
+		int cylindersegments = 3;
 		Vertex cylindervertices[(cylindersegments + 1) * 2];
 		uint32_t cylinderindices[cylindersegments * 6];
 
@@ -385,46 +383,7 @@ namespace
 		cube_index_buffer = createBuffer(sizeof(cubeindices), cubeindices,
 										 VK_BUFFER_USAGE_INDEX_BUFFER_BIT);
 
-		size_t vertex_size = (sizeof(cylindervertices) + sizeof(cubevertices)) / sizeof(cylindervertices[0]);
-		Vertex allvertexes[vertex_size];
-		for (size_t i = 0, n = 0; i < vertex_size; i++)
-		{
-			if (i < sizeof(cylindervertices) / sizeof(cylindervertices[0]))
-			{
-				allvertexes[i] = cylindervertices[i];
-				n++;
-			}
-			else
-			{
-				allvertexes[i] = cubevertices[i - n];
-			}
-		}
-
-		// together objects
-		size_t cylinder_idx_size = sizeof(cylinderindices) / sizeof(cylinderindices[0]);
-		size_t cube_idx_size = sizeof(cubeindices) / sizeof(cubeindices[0]);
-		size_t index_size = cylinder_idx_size + cube_idx_size;
-
-		uint32_t result_idx[index_size];
-
-		for (size_t i = 0, n = 0; i < index_size; i++)
-		{
-			if (i < cylinder_idx_size)
-			{
-				result_idx[i] = cylinderindices[i];
-				n++;
-			}
-			else
-			{
-				result_idx[i] = cubeindices[i - n] + sizeof(cylindervertices) / sizeof(cylindervertices[0]);
-			}
-		}
-
-		/* all_vertex_buffer = createBuffer(sizeof(allvertexes), allvertexes,
-									 VK_BUFFER_USAGE_VERTEX_BUFFER_BIT);
-
-		all_index_buffer = createBuffer(sizeof(result_idx), result_idx,
-									VK_BUFFER_USAGE_INDEX_BUFFER_BIT); */
+		std::cout << "Cylinder indices: " << cylinder_indices_count << ", Cube indices: " << cube_indices_count << std::endl;
 	}
 
 	void shutdown()
@@ -437,6 +396,9 @@ namespace
 		destroyBuffer(cube_index_buffer);
 		destroyBuffer(cube_vertex_buffer);
 
+		if (wireframe_pipeline != VK_NULL_HANDLE) {
+			vkDestroyPipeline(device, wireframe_pipeline, nullptr);
+		}
 		vkDestroyPipeline(device, pipeline, nullptr);
 		vkDestroyPipelineLayout(device, pipeline_layout, nullptr);
 		vkDestroyShaderModule(device, fragment_shader_module, nullptr);
@@ -454,6 +416,7 @@ namespace
 		ImGui::Checkbox("Spin", &cilinder.model_spin);
 		ImGui::Checkbox("Ort View", &ortografics);
 		ImGui::Checkbox("Tracing", &obj_rotation);
+		ImGui::Checkbox("Show Wireframe", &show_wireframe);
 		ImGui::Checkbox("Add satellite", &satellite);
 		if (satellite)
 		{
@@ -461,9 +424,7 @@ namespace
 			ImGui::SliderFloat("Satellite Animation Speed", &cube_animationSpeed, 0.0f, 3.0f);
 			ImGui::Checkbox("Satellite Spin", &cube.model_spin);
 		}
-		
-		
-		// TODO: Your GUI stuff here
+
 		ImGui::End();
 
 		// NOTE: Animation code and other runtime variable updates go here
@@ -476,9 +437,8 @@ namespace
 		{
 			float angle = newangle * 0.1f;
 			newangle += animationSpeed;
-			// angle = fmodf(angle, 2.0f * M_PI);
-			float center_x = 0.0f; // центр окружности по X
-			float center_z = 5.0f; // центр окружности по Z
+			float center_x = 0.0f;
+			float center_z = 5.0f;
 
 			cilinder.model_position.x = center_x + trajectoryRadius * cosf(angle);
 			cilinder.model_position.z = center_z + trajectoryRadius * sinf(angle);
@@ -487,22 +447,22 @@ namespace
 		{
 			float angle = cube_newangle * 0.1f;
 			cube_newangle += cube_animationSpeed;
-			float center_x = cilinder.model_position.x; // центр окружности по X
-			float center_z = cilinder.model_position.z; // центр окружности по Z
+			float center_x = cilinder.model_position.x;
+			float center_z = cilinder.model_position.z;
 
 			cube.model_position.x = center_x + cube_trajectoryRadius * cosf(angle);
 			cube.model_position.z = center_z + cube_trajectoryRadius * sinf(angle);
 			if (cube.model_spin)
-		{
-			cube.model_rotation = float(time);
+			{
+				cube.model_rotation = float(time);
+			}
 		}
-		
-		}else{
+		else
+		{
 			cube.model_position = {4.0f, 0.0f, 0.0f};
 		}
 
 		cilinder.model_rotation = fmodf(cilinder.model_rotation, 2.0f * M_PI);
-		// model_pos = fmodf(model_pos, 2.0f * M_PI);
 	}
 
 	void render(VkCommandBuffer cmd, VkFramebuffer framebuffer)
@@ -540,76 +500,61 @@ namespace
 			vkCmdBeginRenderPass(cmd, &info, VK_SUBPASS_CONTENTS_INLINE);
 		}
 
-		// TODO: Vulkan rendering code here
-		// NOTE: ShaderConstant updates, vkCmdXXX expected to be here
-		// NOTE: Use our new shiny graphics pipeline
-			vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline);
-		{
-			
+		// 1. Сначала рисуем ВСЕ залитые объекты
+		vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline);
 
-			// NOTE: Use our quad vertex buffer
+		// Рендеринг цилиндра с заливкой
+		{
 			VkDeviceSize offset = 0;
 			vkCmdBindVertexBuffers(cmd, 0, 1, &vertex_buffer.buffer, &offset);
-
-			// NOTE: Use our quad index buffer
 			vkCmdBindIndexBuffer(cmd, index_buffer.buffer, offset, VK_INDEX_TYPE_UINT32);
 
-			// NOTE: Variables like model_XXX were declared globally
 			ShaderConstants constants;
 			Matrix transform = multiply(
-
-				rotation({0.0f, 1.0f, 0.0f}, cilinder.model_rotation), // вращение вокруг Y
-				translation(cilinder.model_position)		  // перемещение
+				rotation({0.0f, 1.0f, 0.0f}, cilinder.model_rotation),
+				translation(cilinder.model_position)
 			);
 
 			constants = ShaderConstants{
 				.projection = {},
-
 				.transform = transform,
 				.color = model_color,
 			};
-			if (!ortografics)
-			{ // Перспективная проекция
+			
+			if (!ortografics) {
 				constants.projection = projection(camera_fov, float(veekay::app.window_width) / float(veekay::app.window_height), camera_near_plane, camera_far_plane);
-			}
-			else
-			{ // Ортографическая проекция
+			} else {
 				constants.projection = orthographicProjection(float(veekay::app.window_width) / float(veekay::app.window_height));
 			}
 
-			// NOTE: Update constant memory with new shader constants
 			vkCmdPushConstants(cmd, pipeline_layout,
 							   VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT,
 							   0, sizeof(ShaderConstants), &constants);
 
-			// NOTE: Draw 6 cylinderindices (3 cylindervertices * 2 triangles), 1 group, no offsets
 			vkCmdDrawIndexed(cmd, cylinder_indices_count, 1, 0, 0, 0);
 		}
+
+		// Рендеринг куба с заливкой
 		{
 			VkDeviceSize offset = 0;
-
 			vkCmdBindVertexBuffers(cmd, 0, 1, &cube_vertex_buffer.buffer, &offset);
 			vkCmdBindIndexBuffer(cmd, cube_index_buffer.buffer, 0, VK_INDEX_TYPE_UINT32);
 
 			ShaderConstants constants_cube;
 			Matrix transform = multiply(
-
-				rotation({1.0f, 0.0f, 0.0f}, cube.model_rotation), // вращение вокруг Y
-				translation(cube.model_position)		  // перемещение
-			); // Примерная позиция для куба
+				rotation({1.0f, 0.0f, 0.0f}, cube.model_rotation),
+				translation(cube.model_position)
+			);
 
 			constants_cube = ShaderConstants{
 				.projection = {},
 				.transform = transform,
-				.color = {1.0f, 0.0f, 0.0f}, // Красный цвет для куба
+				.color = {1.0f, 0.0f, 0.0f},
 			};
 
-			if (!ortografics)
-			{ // Перспективная проекция
+			if (!ortografics) {
 				constants_cube.projection = projection(camera_fov, float(veekay::app.window_width) / float(veekay::app.window_height), camera_near_plane, camera_far_plane);
-			}
-			else
-			{ // Ортографическая проекция
+			} else {
 				constants_cube.projection = orthographicProjection(float(veekay::app.window_width) / float(veekay::app.window_height));
 			}
 
@@ -618,6 +563,74 @@ namespace
 							   0, sizeof(ShaderConstants), &constants_cube);
 
 			vkCmdDrawIndexed(cmd, cube_indices_count, 1, 0, 0, 0);
+		}
+
+		// 2. Затем рисуем ВСЕ проволочные объекты поверх
+		if (show_wireframe && wireframe_pipeline != VK_NULL_HANDLE)
+		{
+			vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, wireframe_pipeline);
+
+			// Рендеринг граней цилиндра
+			{
+				VkDeviceSize offset = 0;
+				vkCmdBindVertexBuffers(cmd, 0, 1, &vertex_buffer.buffer, &offset);
+				vkCmdBindIndexBuffer(cmd, index_buffer.buffer, offset, VK_INDEX_TYPE_UINT32);
+
+				ShaderConstants constants;
+				Matrix transform = multiply(
+					rotation({0.0f, 1.0f, 0.0f}, cilinder.model_rotation),
+					translation(cilinder.model_position)
+				);
+
+				constants = ShaderConstants{
+					.projection = {},
+					.transform = transform,
+					.color = {0.0f, 0.0f, 0.0f}, // Черный цвет для граней
+				};
+
+				if (!ortografics) {
+					constants.projection = projection(camera_fov, float(veekay::app.window_width) / float(veekay::app.window_height), camera_near_plane, camera_far_plane);
+				} else {
+					constants.projection = orthographicProjection(float(veekay::app.window_width) / float(veekay::app.window_height));
+				}
+
+				vkCmdPushConstants(cmd, pipeline_layout,
+								   VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT,
+								   0, sizeof(ShaderConstants), &constants);
+
+				vkCmdDrawIndexed(cmd, cylinder_indices_count, 1, 0, 0, 0);
+			}
+
+			// Рендеринг граней куба
+			{
+				VkDeviceSize offset = 0;
+				vkCmdBindVertexBuffers(cmd, 0, 1, &cube_vertex_buffer.buffer, &offset);
+				vkCmdBindIndexBuffer(cmd, cube_index_buffer.buffer, 0, VK_INDEX_TYPE_UINT32);
+
+				ShaderConstants constants_cube;
+				Matrix transform = multiply(
+					rotation({1.0f, 0.0f, 0.0f}, cube.model_rotation),
+					translation(cube.model_position)
+				);
+
+				constants_cube = ShaderConstants{
+					.projection = {},
+					.transform = transform,
+					.color = {0.0f, 0.0f, 0.0f}, // Черный цвет для граней
+				};
+
+				if (!ortografics) {
+					constants_cube.projection = projection(camera_fov, float(veekay::app.window_width) / float(veekay::app.window_height), camera_near_plane, camera_far_plane);
+				} else {
+					constants_cube.projection = orthographicProjection(float(veekay::app.window_width) / float(veekay::app.window_height));
+				}
+
+				vkCmdPushConstants(cmd, pipeline_layout,
+								   VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT,
+								   0, sizeof(ShaderConstants), &constants_cube);
+
+				vkCmdDrawIndexed(cmd, cube_indices_count, 1, 0, 0, 0);
+			}
 		}
 
 		vkCmdEndRenderPass(cmd);
