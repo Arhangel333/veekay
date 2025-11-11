@@ -75,7 +75,7 @@ struct Camera {
 // NOTE: Scene objects
 inline namespace {
 	Camera camera{
-		.position = {0.0f, -0.5f, -3.0f}
+		.position = {0.0f, -0.5f, -3.0f} // {0.0f, -0.5f, -3.0f}
 	};
 
 	std::vector<Model> models;
@@ -110,25 +110,80 @@ float toRadians(float degrees) {
 	return degrees * float(M_PI) / 180.0f;
 }
 
-veekay::mat4 Transform::matrix() const {
+
+// Добавим эти функции если их нет в veekay
+    veekay::mat4 rotation_x(float angle) {
+        float c = cos(angle);
+        float s = sin(angle);
+        return veekay::mat4{
+            1.0f, 0.0f, 0.0f, 0.0f,
+            0.0f,   c,   -s, 0.0f,
+            0.0f,   s,    c, 0.0f,
+            0.0f, 0.0f, 0.0f, 1.0f
+        };
+    }
+    
+    veekay::mat4 rotation_y(float angle) {
+        float c = cos(angle);
+        float s = sin(angle);
+        return veekay::mat4{
+              c, 0.0f,   s, 0.0f,
+            0.0f, 1.0f, 0.0f, 0.0f,
+             -s, 0.0f,   c, 0.0f,
+            0.0f, 0.0f, 0.0f, 1.0f
+        };
+    }
+    
+    veekay::mat4 rotation_z(float angle) {
+        float c = cos(angle);
+        float s = sin(angle);
+        return veekay::mat4{
+              c,   -s, 0.0f, 0.0f,
+              s,    c, 0.0f, 0.0f,
+            0.0f, 0.0f, 1.0f, 0.0f,
+            0.0f, 0.0f, 0.0f, 1.0f
+        };
+    }
+    
+    veekay::mat4 scaling(const veekay::vec3& scale) {
+        return veekay::mat4{
+            scale.x, 0.0f, 0.0f, 0.0f,
+            0.0f, scale.y, 0.0f, 0.0f,
+            0.0f, 0.0f, scale.z, 0.0f,
+            0.0f, 0.0f, 0.0f, 1.0f
+        };
+    }
+
+/* veekay::mat4 Transform::matrix() const {
 	// TODO: Scaling and rotation
 
 	auto t = veekay::mat4::translation(position);
 
 	return t;
+} */
+
+veekay::mat4 Transform::matrix() const {
+    auto scale_mat = scaling(scale);
+    auto rot_x = rotation_x(rotation.x);
+    auto rot_y = rotation_y(rotation.y);
+    auto rot_z = rotation_z(rotation.z);
+    auto rot_mat = rot_z * rot_y * rot_x;
+    auto trans_mat = veekay::mat4::translation(position);
+    return trans_mat * rot_mat * scale_mat;
 }
 
 veekay::mat4 Camera::view() const {
 	// TODO: Rotation
-
-	auto t = veekay::mat4::translation(-position);
-
-	return t;
+	auto rot_x = rotation_x(-rotation.x);      // Используем нашу функцию
+	auto rot_y = rotation_y(rotation.y);      // Используем нашу функцию
+	auto rot_mat = rot_y * rot_x; // Yaw then pitch
+	auto trans_mat = veekay::mat4::translation(-position);
+	return trans_mat * rot_mat ;
 }
 
 veekay::mat4 Camera::view_projection(float aspect_ratio) const {
 	auto projection = veekay::mat4::projection(fov, aspect_ratio, near_plane, far_plane);
-
+	//return projection * view();  // ПРАВИЛЬНЫЙ ПОРЯДОК: проекция * вид
 	return view() * projection;
 }
 
@@ -642,6 +697,25 @@ void update(double time) {
 	ImGui::Begin("Controls:");
 	ImGui::End();
 
+	static int frame_count = 0;
+    frame_count++;
+    
+    ImGui::Begin("Debug Info");
+    ImGui::Text("Frame: %d", frame_count);
+    ImGui::Text("Camera pos: (%.2f, %.2f, %.2f)", 
+                camera.position.x, camera.position.y, camera.position.z);
+    ImGui::Text("Camera rot: (%.2f, %.2f, %.2f)", 
+                camera.rotation.x, camera.rotation.y, camera.rotation.z);
+    
+    // Простая проверка ввода
+    using namespace veekay::input;
+    bool w_pressed = keyboard::isKeyDown(keyboard::Key::w);
+    bool mouse_pressed = mouse::isButtonDown(mouse::Button::left);
+    ImGui::Text("W pressed: %s", w_pressed ? "YES" : "NO");
+    ImGui::Text("Mouse pressed: %s", mouse_pressed ? "YES" : "NO");
+    
+    ImGui::End();
+
 	if (!ImGui::IsWindowHovered()) {
 		using namespace veekay::input;
 
@@ -649,32 +723,47 @@ void update(double time) {
 			auto move_delta = mouse::cursorDelta();
 
 			// TODO: Use mouse_delta to update camera rotation
-			
+			const float sensitivity = 0.01f;
+            camera.rotation.y += move_delta.x * sensitivity; // yaw
+            camera.rotation.x += move_delta.y * sensitivity; // pitch
+
+			// Ограничиваем pitch чтобы не переворачивать камеру
+            if (camera.rotation.x > 1.57f) camera.rotation.x = 1.57f;
+            if (camera.rotation.x < -1.57f) camera.rotation.x = -1.57f;
+		}
 			auto view = camera.view();
 
 			// TODO: Calculate right, up and front from view matrix
-			veekay::vec3 right = {1.0f, 0.0f, 0.0f};
-			veekay::vec3 up = {0.0f, -1.0f, 0.0f};
-			veekay::vec3 front = {0.0f, 0.0f, 1.0f};
+			/* veekay::vec3 right = {1.0f, 0.0f, 0.0f};
+			veekay::vec3 up = {0.0f, -1.0f, 0.0f};*/
+			//veekay::vec3 front = {0.0f, 0.0f, 1.0f}; 
 
+			// Вычисляем векторы направления из матрицы вида
+			veekay::vec3 right = {view[0][0], view[1][0], view[2][0]};
+			veekay::vec3 up = {-view[0][1], -view[1][1], -view[2][1]};
+            veekay::vec3 front = {view[0][2], view[1][2], view[2][2]};
+			
+
+
+			float camera_speed = 0.1f;
 			if (keyboard::isKeyDown(keyboard::Key::w))
-				camera.position += front * 0.1f;
+				camera.position += front * camera_speed;
+				
 
 			if (keyboard::isKeyDown(keyboard::Key::s))
-				camera.position -= front * 0.1f;
+				camera.position -= front * camera_speed;
 
 			if (keyboard::isKeyDown(keyboard::Key::d))
-				camera.position += right * 0.1f;
+				camera.position += right * camera_speed;
 
 			if (keyboard::isKeyDown(keyboard::Key::a))
-				camera.position -= right * 0.1f;
+				camera.position -= right * camera_speed;
 
 			if (keyboard::isKeyDown(keyboard::Key::q))
-				camera.position += up * 0.1f;
+				camera.position += up * camera_speed;
 
 			if (keyboard::isKeyDown(keyboard::Key::z))
-				camera.position -= up * 0.1f;
-		}
+				camera.position -= up * camera_speed;
 	}
 
 	float aspect_ratio = float(veekay::app.window_width) / float(veekay::app.window_height);
