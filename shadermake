@@ -1,0 +1,19 @@
+# Makefile for shaders compilation
+
+SHADERS = ./testbed/shaders/shader.vert.spv ./testbed/shaders/shader.frag.spv
+
+all: $(SHADERS)
+
+./testbed/shaders/shader.vert.spv: ./testbed/shaders/shader.vert
+	glslangValidator -V $< -o $@
+	@echo "✅ Compiled: $@"
+
+./testbed/shaders/shader.frag.spv: ./testbed/shaders/shader.frag
+	glslangValidator -V $< -o $@
+	@echo "✅ Compiled: $@"
+
+clean:
+	rm -f $(SHADERS)
+	@echo "🧹 Cleaned shaders"
+
+.PHONY: all clean

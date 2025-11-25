@@ -1,29 +1,42 @@
 #version 450
 
-layout (location = 0) in vec3 v_position;
-layout (location = 1) in vec3 v_normal;
-layout (location = 2) in vec2 v_uv;
-
-layout (location = 0) out vec3 f_position;
-layout (location = 1) out vec3 f_normal;
-layout (location = 2) out vec2 f_uv;
-
-layout (binding = 0, std140) uniform SceneUniforms {
-	mat4 view_projection;
+// 👇 ДОБАВИМ СТРУКТУРУ MATERIAL
+struct Material {
+    vec3 albedo;
+    vec3 specular;  
+    float shininess;
 };
 
-layout (binding = 1, std140) uniform ModelUniforms {
-	mat4 model;
-	vec3 albedo_color;
+layout(location = 0) in vec3 v_position;
+layout(location = 1) in vec3 v_normal;
+layout(location = 2) in vec2 v_uv;
+
+layout(binding = 0, std140) uniform SceneUniforms {
+    mat4 view_projection;
+    vec3 view_position;     // 👈 ДОБАВИМ ПОЗИЦИЮ КАМЕРЫ!
+    uint point_light_count;
 };
+
+layout(binding = 1, std140) uniform ModelUniforms {
+    mat4 model;
+    mat4 normal_matrix; 
+    Material material;
+};
+
+// 👇 ПЕРЕДАЁМ БОЛЬШЕ ДАННЫХ ДЛЯ ОСВЕЩЕНИЯ
+layout(location = 0) out vec3 fragPosition;    // Позиция в мировых координатах
+layout(location = 1) out vec3 fragNormal;      // Нормаль в мировых координатах  
+layout(location = 2) out vec3 fragColor;       // Цвет материала
 
 void main() {
-	vec4 position = model * vec4(v_position, 1.0f);
-	vec4 normal = model * vec4(v_normal, 0.0f);
+    // 👇 ПРАВИЛЬНОЕ ПРЕОБРАЗОВАНИЕ ПОЗИЦИИ
+    vec4 worldPosition = model * vec4(v_position, 1.0);
+     gl_Position = view_projection * model * vec4(v_position, 1.0);
 
-	gl_Position = view_projection * position;
-
-	f_position = position.xyz;
-	f_normal = normal.xyz;
-	f_uv = v_uv;
+    // 👇 ПРАВИЛЬНОЕ ПРЕОБРАЗОВАНИЕ НОРМАЛЕЙ
+    fragNormal = mat3(normal_matrix) * v_normal;
+    
+    // Передаём данные для освещения
+    fragPosition = worldPosition.xyz;
+    fragColor = material.albedo;
 }
