@@ -25,13 +25,14 @@ namespace
 		// NOTE: You can add more attributes
 	};
 
-	struct Material {
-    veekay::vec3 albedo;     // 12 bytes
-    float _pad0;             // 👈 ДОБАВЬ ПАДДИНГ до 16 bytes
-    veekay::vec3 specular;   // 12 bytes  
-    float shininess;         // 4 bytes
-    // Итого: 32 bytes (совпадает с GLSL)
-};
+	struct Material
+	{
+		veekay::vec3 albedo;   // 12 bytes
+		float _pad0;		   // 👈 ДОБАВЬ ПАДДИНГ до 16 bytes
+		veekay::vec3 specular; // 12 bytes
+		float shininess;	   // 4 bytes
+		// Итого: 32 bytes (совпадает с GLSL)
+	};
 
 	struct SceneUniforms
 	{
@@ -95,12 +96,14 @@ namespace
 
 	struct PointLight
 	{
-		veekay::vec3 position;
-		veekay::vec3 color;
-		float intensity;
-		float constant;
-		float linear;
-		float quadratic;
+		veekay::vec3 position; // 12 bytes
+		float _pad0;		   // 👈 4 bytes padding
+		veekay::vec3 color;	   // 12 bytes
+		float _pad1;		   // 👈 4 bytes padding
+		float intensity;	   // 4 bytes
+		float constant;		   // 4 bytes
+		float linear;		   // 4 bytes
+		float quadratic;	   // 4 bytes
 	};
 
 	// NOTE: Scene objects
@@ -539,6 +542,13 @@ namespace
 				return;
 			}
 
+			// В initialize() - посмотри что в массиве:
+			printf("Pipeline layout sets: %d\n", layout_info.setLayoutCount);
+			for (uint32_t i = 0; i < layout_info.setLayoutCount; i++)
+			{
+				printf("Set %d: %p\n", i, (void *)descriptor_set_layouts[i]);
+			}
+
 			VkGraphicsPipelineCreateInfo info{
 				.sType = VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO,
 				.stageCount = 2,
@@ -778,12 +788,13 @@ namespace
 				.specular = {0.5f, 0.5f, 0.5f},
 				.shininess = 60.0f}});
 
-		models.emplace_back(Model{
-			.mesh = cube_mesh,
-			.transform = Transform{
-				.position = {-2.0f, -0.5f, -1.5f},
-			},
-			.material = Material{.albedo = {1.0f, 0.0f, 0.0f}, .specular = {0.7f, 0.7f, 0.7f}, .shininess = 1.0f}});
+		models.emplace_back(
+			Model{
+				.mesh = cube_mesh,
+				.transform = Transform{
+					.position = {-2.0f, -0.5f, -1.5f},
+				},
+				.material = Material{.albedo = {1.0f, 0.0f, 0.0f}, .specular = {0.7f, 0.7f, 0.7f}, .shininess = 100.0f}});
 
 		models.emplace_back(Model{
 			.mesh = cube_mesh,
@@ -801,25 +812,25 @@ namespace
 
 		// 1. Создаем несколько источников света
 		point_lights.push_back(PointLight{
-			.position = {0.0f, 2.0f, 0.0f}, //  Свет сверху
-			.color = {1.0f, 1.0f, 1.0f},	//  Белый свет
-			.intensity = 1.0f,
+			.position = {-2.0f, -2.0f, 2.0f}, //  Свет сверху
+			.color = {0.0f, 1.0f, 0.0f},	//  Green light
+			.intensity = 1.5f,
 			.constant = 1.0f,
 			.linear = 0.09f,
 			.quadratic = 0.032f});
 
 		point_lights.push_back(PointLight{
-			.position = {2.0f, 1.0f, 2.0f}, //  Свет справа-спереди
+			.position = {2.0f, -2.0f, 0.0f}, //  Свет справа-спереди
 			.color = {1.0f, 0.0f, 0.0f},	//  Красный свет
-			.intensity = 0.8f,
+			.intensity = 1.5f,
 			.constant = 1.0f,
 			.linear = 0.09f,
 			.quadratic = 0.032f});
 
 		point_lights.push_back(PointLight{
-			.position = {-2.0f, 1.0f, -1.0f}, //  Свет слева-сзади
+			.position = {-1.0f, -2.0f, -2.0f}, //  Свет слева-сзади
 			.color = {0.0f, 0.0f, 1.0f},	  //  Синий свет
-			.intensity = 0.8f,
+			.intensity = 1.5f,
 			.constant = 1.0f,
 			.linear = 0.09f,
 			.quadratic = 0.032f});
@@ -932,7 +943,7 @@ namespace
 		if (ImGui::Button("Add New Light"))
 		{
 			point_lights.push_back(PointLight{
-				.position = {0.0f, 2.0f, 0.0f},
+				.position = {0.0f, -2.0f, 0.0f},
 				.color = {1.0f, 1.0f, 1.0f},
 				.intensity = 1.0f,
 				.constant = 1.0f,
