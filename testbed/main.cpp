@@ -16,6 +16,7 @@ namespace
 {
 
 	constexpr uint32_t max_models = 1024;
+	constexpr uint32_t max_lights = 1024;
 
 	struct Vertex
 	{
@@ -31,7 +32,7 @@ namespace
 		float _pad0;		   // 👈 ДОБАВЬ ПАДДИНГ до 16 bytes
 		veekay::vec3 specular; // 12 bytes
 		float shininess;	   // 4 bytes
-		// Итого: 32 bytes (совпадает с GLSL)
+							   // Итого: 32 bytes (совпадает с GLSL)
 	};
 
 	struct SceneUniforms
@@ -40,7 +41,8 @@ namespace
 		veekay::vec3 view_position;
 		float _pad0;
 		uint32_t point_light_count;
-		float _pad1[3];
+		uint32_t spot_light_count;
+		float _pad1[2];
 	};
 
 	struct ModelUniforms
@@ -94,6 +96,12 @@ namespace
 		veekay::mat4 view_projection(float aspect_ratio) const;
 	};
 
+	struct GlobalLighting
+	{
+		vec3 ambientColor;
+		float ambientIntensity;
+	};
+
 	struct PointLight
 	{
 		veekay::vec3 position; // 12 bytes
@@ -104,6 +112,29 @@ namespace
 		float constant;		   // 4 bytes
 		float linear;		   // 4 bytes
 		float quadratic;	   // 4 bytes
+	};
+
+	struct SpotLight
+	{
+		veekay::vec3 position;	// 12 bytes
+		float _pad0;			// 4 bytes padding
+		veekay::vec3 direction; // 12 bytes
+		float _pad1;			// 4 bytes padding
+		veekay::vec3 color;		// 12 bytes
+		float _pad2;			// 4 bytes padding
+		float intensity;		// 4 bytes
+		float cutOff;			// 4 bytes (cos(внутренний угол))
+		float outerCutOff;		// 4 bytes (cos(внешний угол))
+		float constant;			// 4 bytes
+		float linear;			// 4 bytes
+		float quadratic;		// 4 bytes
+	};
+
+	struct DirectionalLight
+	{
+		vec3 direction;
+		vec3 color;
+		float intensity;
 	};
 
 	// NOTE: Scene objects
@@ -119,9 +150,15 @@ namespace
 		veekay::graphics::Buffer *point_lights_ssbo;
 		std::vector<PointLight> point_lights;
 
+		veekay::graphics::Buffer *spot_lights_ssbo;
+		std::vector<SpotLight> spot_lights;
+
 		// Дескрипторы для SSBO
 		VkDescriptorSetLayout ssbo_descriptor_set_layout;
 		VkDescriptorSet ssbo_descriptor_set;
+
+		// VkDescriptorSet spot_lights_descriptor_set;
+		// VkDescriptorSetLayout spot_lights_layout;
 	}
 
 	// NOTE: Vulkan objects
@@ -499,17 +536,24 @@ namespace
 
 			// 1. Создаем макет дескриптора для SSBO
 			{
-				VkDescriptorSetLayoutBinding ssbo_binding{
-					.binding = 0, // binding = 0 для SSBO
-					.descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
-					.descriptorCount = 1,
-					.stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT, // Используем во фрагментном шейдере
-				};
+				VkDescriptorSetLayoutBinding ssbo_bindings[] = {
+					{
+						.binding = 0, // binding = 0 для SSBO
+						.descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
+						.descriptorCount = 1,
+						.stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT, // Используем во фрагментном шейдере
+					},
+					{
+						.binding = 1, // 👈 spot_lights_ssbo - ДОБАВЬ
+						.descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
+						.descriptorCount = 1,
+						.stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT,
+					}};
 
 				VkDescriptorSetLayoutCreateInfo ssbo_layout_info{
 					.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO,
-					.bindingCount = 1,
-					.pBindings = &ssbo_binding,
+					.bindingCount = 2,
+					.pBindings = ssbo_bindings,
 				};
 
 				if (vkCreateDescriptorSetLayout(device, &ssbo_layout_info, nullptr,
@@ -523,13 +567,12 @@ namespace
 
 			// 👇 СОЗДАЕМ МАССИВ макетов дескрипторов
 			VkDescriptorSetLayout descriptor_set_layouts[] = {
-				descriptor_set_layout,	   //  Первый: для UBO (камера, материалы)
-				ssbo_descriptor_set_layout //  Второй: для SSBO (источники света)
-			};
+				descriptor_set_layout, //  Первый: для UBO (камера, материалы)
+				ssbo_descriptor_set_layout};
 
 			VkPipelineLayoutCreateInfo layout_info{
 				.sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO,
-				.setLayoutCount = 2,				   //  Теперь 2 макета!
+				.setLayoutCount = 2,
 				.pSetLayouts = descriptor_set_layouts, //  Оба макета
 			};
 
@@ -541,6 +584,8 @@ namespace
 				veekay::app.running = false;
 				return;
 			}
+
+			// Создаём layout для Set 2 (прожекторы)
 
 			// В initialize() - посмотри что в массиве:
 			printf("Pipeline layout sets: %d\n", layout_info.setLayoutCount);
@@ -810,44 +855,62 @@ namespace
 			},
 			.material = Material{.albedo = {0.0f, 0.0f, 1.0f}, .specular = {1.0f, 1.0f, 1.0f}, .shininess = 100.0f}});
 
+		float intens = 0.0f;
 		// 1. Создаем несколько источников света
 		point_lights.push_back(PointLight{
 			.position = {-2.0f, -2.0f, 2.0f}, //  Свет сверху
-			.color = {0.0f, 1.0f, 0.0f},	//  Green light
-			.intensity = 1.5f,
+			.color = {0.0f, 1.0f, 0.0f},	  //  Green light
+			.intensity = intens,
 			.constant = 1.0f,
 			.linear = 0.09f,
 			.quadratic = 0.032f});
 
 		point_lights.push_back(PointLight{
 			.position = {2.0f, -2.0f, 0.0f}, //  Свет справа-спереди
-			.color = {1.0f, 0.0f, 0.0f},	//  Красный свет
-			.intensity = 1.5f,
+			.color = {1.0f, 0.0f, 0.0f},	 //  Красный свет
+			.intensity = intens,
 			.constant = 1.0f,
 			.linear = 0.09f,
 			.quadratic = 0.032f});
 
 		point_lights.push_back(PointLight{
 			.position = {-1.0f, -2.0f, -2.0f}, //  Свет слева-сзади
-			.color = {0.0f, 0.0f, 1.0f},	  //  Синий свет
+			.color = {0.0f, 0.0f, 1.0f},	   //  Синий свет
+			.intensity = intens,
+			.constant = 1.0f,
+			.linear = 0.09f,
+			.quadratic = 0.032f});
+
+		spot_lights.push_back(SpotLight{
+			.position = {0.0f, -5.0f, 0.0f},
+			.direction = {0.0f, -1.0f, 0.0f},
+			.color = {1.0f, 1.0f, 0.0f}, // Желтый прожектор
 			.intensity = 1.5f,
+			.cutOff = cos(toRadians(30.0f)),
+			.outerCutOff = cos(toRadians(45.0f)),
 			.constant = 1.0f,
 			.linear = 0.09f,
 			.quadratic = 0.032f});
 
 		// 2. Создаем SSBO буфер и заполняем его источниками света
 		point_lights_ssbo = new veekay::graphics::Buffer(
-			sizeof(PointLight) * point_lights.size(), //  Размер = размер одного источника × количество
-			point_lights.data(),					  //  Данные = массив источников света
-			VK_BUFFER_USAGE_STORAGE_BUFFER_BIT		  //  Тип = Storage Buffer
+			sizeof(PointLight) * max_lights,   //  Размер = размер одного источника × количество
+			point_lights.data(),			   //  Данные = массив источников света
+			VK_BUFFER_USAGE_STORAGE_BUFFER_BIT //  Тип = Storage Buffer
 		);
+
+		// Создаю SSBO для прожекторов
+		spot_lights_ssbo = new veekay::graphics::Buffer(
+			sizeof(SpotLight) * max_lights,
+			spot_lights.data(),
+			VK_BUFFER_USAGE_STORAGE_BUFFER_BIT);
 
 		// 3. Связываем SSBO буфер с дескриптором
 		{
 			VkDescriptorBufferInfo ssbo_buffer_info{
 				.buffer = point_lights_ssbo->buffer, //  Наш SSBO буфер
 				.offset = 0,
-				.range = sizeof(PointLight) * point_lights.size(), //  Весь размер буфера
+				.range = sizeof(PointLight) * max_lights, //  Весь размер буфера
 			};
 
 			VkWriteDescriptorSet ssbo_write{
@@ -861,6 +924,25 @@ namespace
 			};
 
 			vkUpdateDescriptorSets(device, 1, &ssbo_write, 0, nullptr);
+		}
+
+		{
+			VkDescriptorBufferInfo spot_buffer_info{
+				.buffer = spot_lights_ssbo->buffer,
+				.offset = 0,
+				.range = sizeof(SpotLight) * max_lights,
+			};
+
+			VkWriteDescriptorSet spot_write{
+				.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
+				.dstSet = ssbo_descriptor_set, // 👈 ТОТ ЖЕ СЕТ!
+				.dstBinding = 1,			   // 👈 BINDING 1 ДЛЯ SPOT LIGHTS
+				.descriptorCount = 1,
+				.descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
+				.pBufferInfo = &spot_buffer_info,
+			};
+
+			vkUpdateDescriptorSets(device, 1, &spot_write, 0, nullptr);
 		}
 	}
 
@@ -942,13 +1024,16 @@ namespace
 		// Кнопка для добавления нового источника света
 		if (ImGui::Button("Add New Light"))
 		{
-			point_lights.push_back(PointLight{
-				.position = {0.0f, -2.0f, 0.0f},
-				.color = {1.0f, 1.0f, 1.0f},
-				.intensity = 1.0f,
-				.constant = 1.0f,
-				.linear = 0.09f,
-				.quadratic = 0.032f});
+			if (point_lights.size() <= max_lights)
+			{
+				point_lights.push_back(PointLight{
+					.position = {0.0f, -2.0f, 0.0f},
+					.color = {1.0f, 1.0f, 1.0f},
+					.intensity = 1.0f,
+					.constant = 1.0f,
+					.linear = 0.09f,
+					.quadratic = 0.032f});
+			}
 		}
 
 		// Кнопка для удаления последнего источника света
@@ -970,15 +1055,21 @@ namespace
 		SceneUniforms scene_uniforms{
 			.view_projection = camera.view_projection(aspect_ratio),
 			.view_position = camera.position,
-			.point_light_count = uint32_t(point_lights.size()) //  ПЕРЕДАЕМ актуальное количество!
-		};
+			.point_light_count = uint32_t(point_lights.size()), //  ПЕРЕДАЕМ актуальное количество!
+			.spot_light_count = uint32_t(spot_lights.size())};
 
 		// 👇 ОБНОВЛЯЕМ SSBO С ИСТОЧНИКАМИ СВЕТА:
-		if (point_lights_ssbo)
+		if (point_lights_ssbo && point_lights_ssbo->mapped_region)
 		{
 			// Копируем обновленные данные источников света в SSBO
 			memcpy(point_lights_ssbo->mapped_region, point_lights.data(),
 				   sizeof(PointLight) * point_lights.size());
+		}
+
+		if (spot_lights_ssbo && spot_lights_ssbo->mapped_region)
+		{
+			memcpy(spot_lights_ssbo->mapped_region, spot_lights.data(),
+				   sizeof(SpotLight) * spot_lights.size());
 		}
 		/* static int frame_count = 0;
 		frame_count++; */

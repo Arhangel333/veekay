@@ -12,6 +12,21 @@ struct PointLight
 		float quadratic;	   // 4 bytes
 	};
 
+struct SpotLight {
+    vec3 position;
+    float _pad0;
+    vec3 direction;
+    float _pad1;
+    vec3 color;
+    float _pad2;
+    float intensity;
+    float cutOff;
+    float outerCutOff;
+    float constant;
+    float linear;
+    float quadratic;
+};
+
 struct Material {
     vec3 albedo;
     vec3 specular;  
@@ -27,7 +42,8 @@ layout(binding = 0) uniform SceneUniforms {
     vec3 view_position;       // 12 bytes  
     float _pad0;              // 👈 4 bytes padding (до 16)
     uint point_light_count;   // 4 bytes
-    float _pad1[3];           // 👈 12 bytes padding (до 16)
+    uint spot_light_count;
+    float _pad1[2];           // 👈 12 bytes padding (до 16)
 };
 
 layout(binding = 1) uniform ModelUniforms {
@@ -40,6 +56,10 @@ layout(set = 1, binding = 0) readonly buffer PointLightsSSBO {
     PointLight point_lights[];
 };
 
+layout(set = 1, binding = 1) readonly buffer SpotLightsSSBO {
+    SpotLight spot_lights[];
+};
+
 layout(location = 0) out vec4 outColor;
 
 vec3 calculatePointLight(PointLight light, vec3 normal, vec3 fragPos, vec3 viewDir) {
@@ -49,9 +69,9 @@ vec3 calculatePointLight(PointLight light, vec3 normal, vec3 fragPos, vec3 viewD
     float diff = max(dot(normal, lightDir), 0.0);
     vec3 diffuse = light.color * diff * light.intensity;
     
-    // Specular составляющая
-    vec3 reflectDir = reflect(-lightDir, normal);
-    float spec = pow(max(dot(viewDir, reflectDir), 0.0), material.shininess);
+    // 👇 SPECULAR - БЛИНН-ФОНГ (ИСПРАВЛЕНО)
+    vec3 halfDir = normalize(lightDir + viewDir);
+    float spec = pow(max(dot(normal, halfDir), 0.0), material.shininess);
     vec3 specular = light.color * spec * material.specular * light.intensity;
     
     // Затухание (attenuation)
@@ -62,35 +82,76 @@ vec3 calculatePointLight(PointLight light, vec3 normal, vec3 fragPos, vec3 viewD
     return (diffuse + specular) * attenuation;
 }
 
+vec3 calculateSpotLight(SpotLight light, vec3 normal, vec3 fragPos, vec3 viewDir) {
+    vec3 lightDir = normalize(light.position - fragPos);
+    
+    // Проверка угла
+    float theta = dot(lightDir, normalize(light.direction));
+    float epsilon = light.cutOff - light.outerCutOff;
+    float intensity = clamp((theta - light.outerCutOff) / epsilon, 0.0, 1.0);
+    
+    if (theta > light.outerCutOff) {
+        // Диффуз
+        float diff = max(dot(normal, lightDir), 0.0);
+        vec3 diffuse = light.color * diff * light.intensity;
+        
+        // Specular (Блинн-Фонг)
+        vec3 halfDir = normalize(lightDir + viewDir);
+        float spec = pow(max(dot(normal, halfDir), 0.0), material.shininess);
+        vec3 specular = light.color * spec * material.specular * light.intensity;
+        
+        // Attenuation
+        float distance = length(light.position - fragPos);
+        float attenuation = 1.0 / (light.constant + light.linear * distance + 
+                                  light.quadratic * (distance * distance));
+        
+        return (diffuse + specular) * attenuation * intensity;
+    }
+    
+    return vec3(0.0);
+}
 
 void main() {
     vec3 normal = normalize(fragNormal);
     vec3 viewDir = normalize(view_position - fragPosition);
-    
-    bool Dir_light = false;
-    if(Dir_light){
-    // Направленный свет (опционально)
-    vec3 lightDir = normalize(vec3(0.0, -1.0, 1.0));
-    float diff = max(dot(normal, lightDir), 0.0);
-    vec3 diffuse = fragColor * diff;
-    
-    vec3 reflectDir = reflect(-lightDir, normal);
-    float spec = pow(max(dot(viewDir, reflectDir), 0.0), material.shininess);
-    vec3 specular = material.specular * spec;
-    
 
-    // Ambient составляющая
-    vec3 ambient = fragColor * 0.2;
+    vec3 result = fragColor * 0.2; // Ambient
 
-    vec3 result = ambient + diffuse + specular;
+    // 👇 НАПРАВЛЕННЫЙ СВЕТ (Блинн-Фонг)
+    bool use_directional_light = false;
+    
+    if (use_directional_light) {
+        vec3 lightDir = normalize(vec3(0.0, -1.0, 1.0));
+        
+        // Диффуз
+        float diff = max(dot(normal, lightDir), 0.0);
+        vec3 diffuse = fragColor * diff;
+        
+        // 👇 SPECULAR - БЛИНН-ФОНГ
+        vec3 halfDir = normalize(lightDir + viewDir);
+        float spec = pow(max(dot(normal, halfDir), 0.0), material.shininess);
+        vec3 specular = material.specular * spec;
+        
+        result += diffuse + specular;
+    }
+    
+    for (int i = 0; i < spot_light_count; i++) {
+        result += calculateSpotLight(spot_lights[i], normal, fragPosition, viewDir);
     }
 
-    vec3 result = fragColor * 0.2;
+    
+    //outColor = vec4(result, 1.0);
 
 
+
+    // 👇 ТОЧЕЧНЫЕ ИСТОЧНИКИ (теперь используют Блинн-Фонг)
     for (int i = 0; i < point_light_count; i++) {
         result += calculatePointLight(point_lights[i], normal, fragPosition, viewDir);
     }
 
+    
+
+
+    
     outColor = vec4(result, 1.0);
 }
