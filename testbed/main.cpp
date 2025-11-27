@@ -98,7 +98,7 @@ namespace
 
 	struct GlobalLighting
 	{
-		vec3 ambientColor;
+		veekay::vec3 ambientColor;
 		float ambientIntensity;
 	};
 
@@ -128,12 +128,13 @@ namespace
 		float constant;			// 4 bytes
 		float linear;			// 4 bytes
 		float quadratic;		// 4 bytes
+		float _pad3[2];
 	};
 
 	struct DirectionalLight
 	{
-		vec3 direction;
-		vec3 color;
+		veekay::vec3 direction;
+		veekay::vec3 color;
 		float intensity;
 	};
 
@@ -990,59 +991,119 @@ namespace
 		// 👇 ДОБАВЛЯЕМ НОВЫЙ UI ДЛЯ УПРАВЛЕНИЯ СВЕТОМ:
 		ImGui::Begin("Lighting Controls");
 
-		// Информация о камере
-		ImGui::Text("Camera pos: (%.2f, %.2f, %.2f)",
-					camera.position.x, camera.position.y, camera.position.z);
-		ImGui::Text("Camera rot: (%.2f, %.2f, %.2f)",
-					camera.rotation.x, camera.rotation.y, camera.rotation.z);
+// Информация о камере
+ImGui::Text("Camera pos: (%.2f, %.2f, %.2f)",
+            camera.position.x, camera.position.y, camera.position.z);
+ImGui::Text("Camera rot: (%.2f, %.2f, %.2f)",
+            camera.rotation.x, camera.rotation.y, camera.rotation.z);
 
-		ImGui::Separator();
-		ImGui::Text("Point Lights (Count: %d):", (int)point_lights.size());
+ImGui::Separator();
+ImGui::Text("Point Lights (Count: %d):", (int)point_lights.size());
 
-		// Управление каждым источником света
-		for (size_t i = 0; i < point_lights.size(); i++)
-		{
-			ImGui::PushID(int(i));
+// Управление точечными источниками
+for (size_t i = 0; i < point_lights.size(); i++)
+{
+    ImGui::PushID(int(i));
+    if (ImGui::CollapsingHeader(("Point Light " + std::to_string(i + 1)).c_str()))
+    {
+        ImGui::DragFloat3("Position", &point_lights[i].position.x, 0.1f);
+        ImGui::ColorEdit3("Color", &point_lights[i].color.x);
+        ImGui::DragFloat("Intensity", &point_lights[i].intensity, 0.1f, 0.0f, 5.0f);
+        // ... остальные параметры ...
+    }
+    ImGui::PopID();
+}
 
-			if (ImGui::CollapsingHeader(("Light " + std::to_string(i + 1)).c_str()))
-			{
-				ImGui::DragFloat3("Position", &point_lights[i].position.x, 0.1f);
-				ImGui::ColorEdit3("Color", &point_lights[i].color.x);
-				ImGui::DragFloat("Intensity", &point_lights[i].intensity, 0.1f, 0.0f, 5.0f);
+ImGui::Separator();
+ImGui::Text("Spot Lights (Count: %d):", (int)spot_lights.size());
 
-				ImGui::Text("Attenuation:");
-				ImGui::DragFloat("Constant", &point_lights[i].constant, 0.01f, 0.1f, 10.0f);
-				ImGui::DragFloat("Linear", &point_lights[i].linear, 0.001f, 0.0f, 1.0f);
-				ImGui::DragFloat("Quadratic", &point_lights[i].quadratic, 0.001f, 0.0f, 1.0f);
-			}
+// Управление прожекторами - ПЕРЕМЕСТИТЕ ЭТОТ БЛОК СЮДА
+for (size_t i = 0; i < spot_lights.size(); i++)
+{
+    ImGui::PushID(int(i) + 1000); // Добавьте смещение для уникальности ID
+    if (ImGui::CollapsingHeader(("Spot Light " + std::to_string(i + 1)).c_str()))
+    {
+        ImGui::DragFloat3("Position", &spot_lights[i].position.x, 0.1f);
+        ImGui::DragFloat3("Direction", &spot_lights[i].direction.x, 0.1f);
+        ImGui::ColorEdit3("Color", &spot_lights[i].color.x);
+        ImGui::DragFloat("Intensity", &spot_lights[i].intensity, 0.1f, 0.0f, 5.0f);
+        
+        // Преобразуем обратно в градусы для удобства
+        float cutOff_deg = acos(spot_lights[i].cutOff) * 180.0f / M_PI;
+        float outerCutOff_deg = acos(spot_lights[i].outerCutOff) * 180.0f / M_PI;
+        
+        if (ImGui::DragFloat("CutOff (degrees)", &cutOff_deg, 1.0f, 0.0f, 90.0f))
+            spot_lights[i].cutOff = cos(toRadians(cutOff_deg));
+            
+        if (ImGui::DragFloat("OuterCutOff (degrees)", &outerCutOff_deg, 1.0f, 0.0f, 90.0f))
+            spot_lights[i].outerCutOff = cos(toRadians(outerCutOff_deg));
+    }
+    ImGui::PopID();
+}
 
-			ImGui::PopID();
-		}
+ImGui::Separator();
 
-		ImGui::Separator();
+// Кнопки добавления/удаления - ТЕПЕРЬ ПОСЛЕ ВСЕХ ИСТОЧНИКОВ
+if (ImGui::Button("Add Point Light") && point_lights.size() < max_lights)
+{
+    point_lights.push_back(PointLight{
+        .position = {0.0f, -2.0f, 0.0f},
+        .color = {1.0f, 1.0f, 1.0f},
+        .intensity = 1.0f,
+        .constant = 1.0f,
+        .linear = 0.09f,
+        .quadratic = 0.032f});
+}
 
-		// Кнопка для добавления нового источника света
-		if (ImGui::Button("Add New Light"))
-		{
-			if (point_lights.size() <= max_lights)
-			{
-				point_lights.push_back(PointLight{
-					.position = {0.0f, -2.0f, 0.0f},
-					.color = {1.0f, 1.0f, 1.0f},
-					.intensity = 1.0f,
-					.constant = 1.0f,
-					.linear = 0.09f,
-					.quadratic = 0.032f});
-			}
-		}
+ImGui::SameLine();
+if (ImGui::Button("Remove Point Light") && !point_lights.empty())
+{
+    point_lights.pop_back();
+}
 
-		// Кнопка для удаления последнего источника света
-		if (ImGui::Button("Remove Last Light") && !point_lights.empty())
-		{
-			point_lights.pop_back();
-		}
 
-		ImGui::End();
+
+if (ImGui::Button("Add Spot Light") && spot_lights.size() < max_lights)
+{printf("=== ADDING SPOT LIGHT ===\n");
+    printf("Before: count = %zu\n", spot_lights.size());
+    
+    if (spot_lights.size() < max_lights) {
+        spot_lights.push_back(SpotLight{
+            .position = {0.0f, -5.0f, 0.0f},
+            .direction = {0.0f, -1.0f, 0.0f},
+            .color = {1.0f, 1.0f, 0.0f},
+            .intensity = 1.5f,
+            .cutOff = cos(toRadians(30.0f)),
+            .outerCutOff = cos(toRadians(45.0f)),
+            .constant = 1.0f,
+            .linear = 0.09f,
+            .quadratic = 0.032f
+        });
+        printf("After: count = %zu\n", spot_lights.size());
+    } else {
+        printf("FAILED: max lights reached\n");
+    }
+    /* spot_lights.push_back(SpotLight{
+        .position = {0.0f, -5.0f, 0.0f},
+        .direction = {0.0f, -1.0f, 0.0f},
+        .color = {1.0f, 1.0f, 0.0f},
+        .intensity = 1.5f,
+        .cutOff = cos(toRadians(30.0f)),
+        .outerCutOff = cos(toRadians(45.0f)),
+        .constant = 1.0f,
+        .linear = 0.09f,
+        .quadratic = 0.032f}); */
+}
+
+ImGui::SameLine();
+if (ImGui::Button("Remove Spot Light") && !spot_lights.empty())
+{
+    spot_lights.pop_back();
+}
+
+ImGui::End();
+		
+		
 
 		// 👇 ОСТАЛЬНАЯ ЧАСТЬ ФУНКЦИИ update() БЕЗ ИЗМЕНЕНИЙ:
 		if (!ImGui::IsWindowHovered())

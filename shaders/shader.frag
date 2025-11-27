@@ -25,6 +25,7 @@ struct SpotLight {
     float constant;
     float linear;
     float quadratic;
+    float _pad3[2];
 };
 
 struct Material {
@@ -37,7 +38,7 @@ layout(location = 0) in vec3 fragPosition;
 layout(location = 1) in vec3 fragNormal;
 layout(location = 2) in vec3 fragColor;
 
-layout(binding = 0) uniform SceneUniforms {
+layout(binding = 0, std140) uniform SceneUniforms {
     mat4 view_projection;     // 64 bytes
     vec3 view_position;       // 12 bytes  
     float _pad0;              // 👈 4 bytes padding (до 16)
@@ -139,19 +140,15 @@ void main() {
         result += calculateSpotLight(spot_lights[i], normal, fragPosition, viewDir);
     }
 
-    
-    //outColor = vec4(result, 1.0);
-
 
 
     // 👇 ТОЧЕЧНЫЕ ИСТОЧНИКИ (теперь используют Блинн-Фонг)
     for (int i = 0; i < point_light_count; i++) {
         result += calculatePointLight(point_lights[i], normal, fragPosition, viewDir);
     }
-
-    
-
-
     
     outColor = vec4(result, 1.0);
+
+    
+    //outColor = vec4(result, 1.0);
 }
