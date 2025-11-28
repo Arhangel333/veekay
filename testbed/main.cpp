@@ -35,16 +35,6 @@ namespace
 							   // Итого: 32 bytes (совпадает с GLSL)
 	};
 
-	struct SceneUniforms
-	{
-		veekay::mat4 view_projection;
-		veekay::vec3 view_position;
-		float _pad0;
-		uint32_t point_light_count;
-		uint32_t spot_light_count;
-		float _pad1[2];
-	};
-
 	struct ModelUniforms
 	{
 		veekay::mat4 model;
@@ -96,12 +86,6 @@ namespace
 		veekay::mat4 view_projection(float aspect_ratio) const;
 	};
 
-	struct GlobalLighting
-	{
-		veekay::vec3 ambientColor;
-		float ambientIntensity;
-	};
-
 	struct PointLight
 	{
 		veekay::vec3 position; // 12 bytes
@@ -134,8 +118,22 @@ namespace
 	struct DirectionalLight
 	{
 		veekay::vec3 direction;
+		float _pad0;
 		veekay::vec3 color;
 		float intensity;
+	};
+
+	struct SceneUniforms
+	{
+		veekay::mat4 view_projection;	  // 64 bytes
+		veekay::vec3 view_position;		  // 12 bytes
+		float _pad0;					  // 4 bytes (16)
+		uint32_t point_light_count;		  // 4 bytes
+		uint32_t spot_light_count;		  // 4 bytes
+		uint32_t directional_light_count; // 4 bytes (12)
+		float _pad1[1];
+		veekay::vec3 ambientColor;		  // 12 bytes
+		float ambientIntensity;
 	};
 
 	// NOTE: Scene objects
@@ -153,6 +151,12 @@ namespace
 
 		veekay::graphics::Buffer *spot_lights_ssbo;
 		std::vector<SpotLight> spot_lights;
+
+		veekay::graphics::Buffer *directional_lights_ssbo;
+		std::vector<DirectionalLight> directional_lights;
+
+		veekay::vec3 ambientColor = {1.0f, 1.0f, 1.0f};
+		float ambientIntensity = 1.0f;
 
 		// Дескрипторы для SSBO
 		VkDescriptorSetLayout ssbo_descriptor_set_layout;
@@ -269,7 +273,7 @@ namespace
 	{
 		std::ifstream file(path, std::ios::binary | std::ios::ate);
 		size_t size = file.tellg();
-		printf("shader %s size: %d\n", path, (int)size);
+		//printf("shader %s size: %d\n", path, (int)size);
 		std::vector<uint32_t> buffer(size / sizeof(uint32_t));
 		file.seekg(0);
 		file.read(reinterpret_cast<char *>(buffer.data()), size);
@@ -529,23 +533,23 @@ namespace
 			}
 
 			// NOTE: Declare external data sources, only push constants this time
-			/* VkPipelineLayoutCreateInfo layout_info{
-				.sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO,
-				.setLayoutCount = 1,
-				.pSetLayouts = &descriptor_set_layout,
-			}; */
-
 			// 1. Создаем макет дескриптора для SSBO
-			{
+			{ // ssbo_bindings
 				VkDescriptorSetLayoutBinding ssbo_bindings[] = {
 					{
-						.binding = 0, // binding = 0 для SSBO
+						.binding = 0, // point lights
 						.descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
 						.descriptorCount = 1,
 						.stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT, // Используем во фрагментном шейдере
 					},
 					{
-						.binding = 1, // 👈 spot_lights_ssbo - ДОБАВЬ
+						.binding = 1, // spot_lights
+						.descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
+						.descriptorCount = 1,
+						.stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT,
+					},
+					{
+						.binding = 2, // directional lights
 						.descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
 						.descriptorCount = 1,
 						.stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT,
@@ -553,7 +557,7 @@ namespace
 
 				VkDescriptorSetLayoutCreateInfo ssbo_layout_info{
 					.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO,
-					.bindingCount = 2,
+					.bindingCount = 3,
 					.pBindings = ssbo_bindings,
 				};
 
@@ -589,11 +593,11 @@ namespace
 			// Создаём layout для Set 2 (прожекторы)
 
 			// В initialize() - посмотри что в массиве:
-			printf("Pipeline layout sets: %d\n", layout_info.setLayoutCount);
+			/* printf("Pipeline layout sets: %d\n", layout_info.setLayoutCount);
 			for (uint32_t i = 0; i < layout_info.setLayoutCount; i++)
 			{
 				printf("Set %d: %p\n", i, (void *)descriptor_set_layouts[i]);
-			}
+			} */
 
 			VkGraphicsPipelineCreateInfo info{
 				.sType = VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO,
@@ -856,7 +860,7 @@ namespace
 			},
 			.material = Material{.albedo = {0.0f, 0.0f, 1.0f}, .specular = {1.0f, 1.0f, 1.0f}, .shininess = 100.0f}});
 
-		float intens = 0.0f;
+		float intens = 1.0f;
 		// 1. Создаем несколько источников света
 		point_lights.push_back(PointLight{
 			.position = {-2.0f, -2.0f, 2.0f}, //  Свет сверху
@@ -906,6 +910,11 @@ namespace
 			spot_lights.data(),
 			VK_BUFFER_USAGE_STORAGE_BUFFER_BIT);
 
+		directional_lights_ssbo = new veekay::graphics::Buffer(
+			sizeof(DirectionalLight) * max_lights,
+			nullptr,
+			VK_BUFFER_USAGE_STORAGE_BUFFER_BIT);
+
 		// 3. Связываем SSBO буфер с дескриптором
 		{
 			VkDescriptorBufferInfo ssbo_buffer_info{
@@ -945,6 +954,25 @@ namespace
 
 			vkUpdateDescriptorSets(device, 1, &spot_write, 0, nullptr);
 		}
+		{
+			VkDescriptorBufferInfo directional_buffer_info{
+				.buffer = directional_lights_ssbo->buffer,
+				.offset = 0,
+				.range = sizeof(DirectionalLight) * max_lights,
+			};
+
+			VkWriteDescriptorSet directional_write{
+				.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
+				.dstSet = ssbo_descriptor_set,
+				.dstBinding = 2,
+				.dstArrayElement = 0,
+				.descriptorCount = 1,
+				.descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
+				.pBufferInfo = &directional_buffer_info,
+			};
+
+			vkUpdateDescriptorSets(device, 1, &directional_write, 0, nullptr);
+		}
 	}
 
 	// NOTE: Destroy resources here, do not cause leaks in your program!
@@ -971,6 +999,8 @@ namespace
 		vkDestroyPipelineLayout(device, pipeline_layout, nullptr);
 		vkDestroyShaderModule(device, fragment_shader_module, nullptr);
 		vkDestroyShaderModule(device, vertex_shader_module, nullptr);
+
+		delete directional_lights_ssbo;
 	}
 
 	void update(double time)
@@ -991,119 +1021,151 @@ namespace
 		// 👇 ДОБАВЛЯЕМ НОВЫЙ UI ДЛЯ УПРАВЛЕНИЯ СВЕТОМ:
 		ImGui::Begin("Lighting Controls");
 
-// Информация о камере
-ImGui::Text("Camera pos: (%.2f, %.2f, %.2f)",
-            camera.position.x, camera.position.y, camera.position.z);
-ImGui::Text("Camera rot: (%.2f, %.2f, %.2f)",
-            camera.rotation.x, camera.rotation.y, camera.rotation.z);
+		// Информация о камере
+		ImGui::Text("Camera pos: (%.2f, %.2f, %.2f)",
+					camera.position.x, camera.position.y, camera.position.z);
+		ImGui::Text("Camera rot: (%.2f, %.2f, %.2f)",
+					camera.rotation.x, camera.rotation.y, camera.rotation.z);
 
-ImGui::Separator();
-ImGui::Text("Point Lights (Count: %d):", (int)point_lights.size());
+		// 👇 UI ДЛЯ ГЛОБАЛЬНОГО ОСВЕЩЕНИЯ
+		ImGui::Separator();
+		ImGui::Text("Global Lighting");
+		ImGui::ColorEdit3("Ambient Color", &ambientColor.x);
+		ImGui::DragFloat("Ambient Intensity", &ambientIntensity, 0.01f, 0.0f, 5.0f);
 
-// Управление точечными источниками
-for (size_t i = 0; i < point_lights.size(); i++)
-{
-    ImGui::PushID(int(i));
-    if (ImGui::CollapsingHeader(("Point Light " + std::to_string(i + 1)).c_str()))
-    {
-        ImGui::DragFloat3("Position", &point_lights[i].position.x, 0.1f);
-        ImGui::ColorEdit3("Color", &point_lights[i].color.x);
-        ImGui::DragFloat("Intensity", &point_lights[i].intensity, 0.1f, 0.0f, 5.0f);
-        // ... остальные параметры ...
-    }
-    ImGui::PopID();
-}
+		// 👇 UI ДЛЯ НАПРАВЛЕННЫХ ИСТОЧНИКОВ
+		ImGui::Separator();
+		ImGui::Text("Directional Lights (Count: %d):", (int)directional_lights.size());
 
-ImGui::Separator();
-ImGui::Text("Spot Lights (Count: %d):", (int)spot_lights.size());
+		for (size_t i = 0; i < directional_lights.size(); i++)
+		{
+			ImGui::PushID(int(i) + 2000);
+			if (ImGui::CollapsingHeader(("Directional Light " + std::to_string(i + 1)).c_str()))
+			{
+				ImGui::DragFloat3("Direction", &directional_lights[i].direction.x, 0.1f);
+				ImGui::ColorEdit3("Color", &directional_lights[i].color.x);
+				ImGui::DragFloat("Intensity", &directional_lights[i].intensity, 0.1f, 0.0f, 5.0f);
+			}
+			ImGui::PopID();
+		}
 
-// Управление прожекторами - ПЕРЕМЕСТИТЕ ЭТОТ БЛОК СЮДА
-for (size_t i = 0; i < spot_lights.size(); i++)
-{
-    ImGui::PushID(int(i) + 1000); // Добавьте смещение для уникальности ID
-    if (ImGui::CollapsingHeader(("Spot Light " + std::to_string(i + 1)).c_str()))
-    {
-        ImGui::DragFloat3("Position", &spot_lights[i].position.x, 0.1f);
-        ImGui::DragFloat3("Direction", &spot_lights[i].direction.x, 0.1f);
-        ImGui::ColorEdit3("Color", &spot_lights[i].color.x);
-        ImGui::DragFloat("Intensity", &spot_lights[i].intensity, 0.1f, 0.0f, 5.0f);
-        
-        // Преобразуем обратно в градусы для удобства
-        float cutOff_deg = acos(spot_lights[i].cutOff) * 180.0f / M_PI;
-        float outerCutOff_deg = acos(spot_lights[i].outerCutOff) * 180.0f / M_PI;
-        
-        if (ImGui::DragFloat("CutOff (degrees)", &cutOff_deg, 1.0f, 0.0f, 90.0f))
-            spot_lights[i].cutOff = cos(toRadians(cutOff_deg));
-            
-        if (ImGui::DragFloat("OuterCutOff (degrees)", &outerCutOff_deg, 1.0f, 0.0f, 90.0f))
-            spot_lights[i].outerCutOff = cos(toRadians(outerCutOff_deg));
-    }
-    ImGui::PopID();
-}
+		// Кнопки для направленных источников
+		if (ImGui::Button("Add Directional Light") && directional_lights.size() < max_lights)
+		{
+			directional_lights.push_back(DirectionalLight{
+				.direction = {0.0f, 1.0f, 0.0f}, // Свет сверху
+				.color = {1.0f, 1.0f, 1.0f},
+				.intensity = 0.8f});
+		}
 
-ImGui::Separator();
+		ImGui::SameLine();
+		if (ImGui::Button("Remove Directional Light") && !directional_lights.empty())
+		{
+			directional_lights.pop_back();
+		}
 
-// Кнопки добавления/удаления - ТЕПЕРЬ ПОСЛЕ ВСЕХ ИСТОЧНИКОВ
-if (ImGui::Button("Add Point Light") && point_lights.size() < max_lights)
-{
-    point_lights.push_back(PointLight{
-        .position = {0.0f, -2.0f, 0.0f},
-        .color = {1.0f, 1.0f, 1.0f},
-        .intensity = 1.0f,
-        .constant = 1.0f,
-        .linear = 0.09f,
-        .quadratic = 0.032f});
-}
+		ImGui::Separator();
+		ImGui::Text("Point Lights (Count: %d):", (int)point_lights.size());
 
-ImGui::SameLine();
-if (ImGui::Button("Remove Point Light") && !point_lights.empty())
-{
-    point_lights.pop_back();
-}
+		// Управление точечными источниками
+		for (size_t i = 0; i < point_lights.size(); i++)
+		{
+			ImGui::PushID(int(i));
+			if (ImGui::CollapsingHeader(("Point Light " + std::to_string(i + 1)).c_str()))
+			{
+				ImGui::DragFloat3("Position", &point_lights[i].position.x, 0.1f);
+				ImGui::ColorEdit3("Color", &point_lights[i].color.x);
+				ImGui::DragFloat("Intensity", &point_lights[i].intensity, 0.1f, 0.0f, 5.0f);
+				// ... остальные параметры ...
+			}
+			ImGui::PopID();
+		}
 
+		ImGui::Separator();
+		ImGui::Text("Spot Lights (Count: %d):", (int)spot_lights.size());
 
+		// Управление прожекторами - ПЕРЕМЕСТИТЕ ЭТОТ БЛОК СЮДА
+		for (size_t i = 0; i < spot_lights.size(); i++)
+		{
+			ImGui::PushID(int(i) + 1000); // Добавьте смещение для уникальности ID
+			if (ImGui::CollapsingHeader(("Spot Light " + std::to_string(i + 1)).c_str()))
+			{
+				ImGui::DragFloat3("Position", &spot_lights[i].position.x, 0.1f);
+				ImGui::DragFloat3("Direction", &spot_lights[i].direction.x, 0.1f);
+				ImGui::ColorEdit3("Color", &spot_lights[i].color.x);
+				ImGui::DragFloat("Intensity", &spot_lights[i].intensity, 0.1f, 0.0f, 5.0f);
 
-if (ImGui::Button("Add Spot Light") && spot_lights.size() < max_lights)
-{printf("=== ADDING SPOT LIGHT ===\n");
-    printf("Before: count = %zu\n", spot_lights.size());
-    
-    if (spot_lights.size() < max_lights) {
-        spot_lights.push_back(SpotLight{
-            .position = {0.0f, -5.0f, 0.0f},
-            .direction = {0.0f, -1.0f, 0.0f},
-            .color = {1.0f, 1.0f, 0.0f},
-            .intensity = 1.5f,
-            .cutOff = cos(toRadians(30.0f)),
-            .outerCutOff = cos(toRadians(45.0f)),
-            .constant = 1.0f,
-            .linear = 0.09f,
-            .quadratic = 0.032f
-        });
-        printf("After: count = %zu\n", spot_lights.size());
-    } else {
-        printf("FAILED: max lights reached\n");
-    }
-    /* spot_lights.push_back(SpotLight{
-        .position = {0.0f, -5.0f, 0.0f},
-        .direction = {0.0f, -1.0f, 0.0f},
-        .color = {1.0f, 1.0f, 0.0f},
-        .intensity = 1.5f,
-        .cutOff = cos(toRadians(30.0f)),
-        .outerCutOff = cos(toRadians(45.0f)),
-        .constant = 1.0f,
-        .linear = 0.09f,
-        .quadratic = 0.032f}); */
-}
+				// Преобразуем обратно в градусы для удобства
+				float cutOff_deg = acos(spot_lights[i].cutOff) * 180.0f / M_PI;
+				float outerCutOff_deg = acos(spot_lights[i].outerCutOff) * 180.0f / M_PI;
 
-ImGui::SameLine();
-if (ImGui::Button("Remove Spot Light") && !spot_lights.empty())
-{
-    spot_lights.pop_back();
-}
+				if (ImGui::DragFloat("CutOff (degrees)", &cutOff_deg, 1.0f, 0.0f, 90.0f))
+					spot_lights[i].cutOff = cos(toRadians(cutOff_deg));
 
-ImGui::End();
-		
-		
+				if (ImGui::DragFloat("OuterCutOff (degrees)", &outerCutOff_deg, 1.0f, 0.0f, 90.0f))
+					spot_lights[i].outerCutOff = cos(toRadians(outerCutOff_deg));
+			}
+			ImGui::PopID();
+		}
+
+		ImGui::Separator();
+
+		// Кнопки добавления/удаления - ТЕПЕРЬ ПОСЛЕ ВСЕХ ИСТОЧНИКОВ
+		if (ImGui::Button("Add Point Light") && point_lights.size() < max_lights)
+		{
+			point_lights.push_back(PointLight{
+				.position = {0.0f, -2.0f, 0.0f},
+				.color = {1.0f, 1.0f, 1.0f},
+				.intensity = 1.0f,
+				.constant = 1.0f,
+				.linear = 0.09f,
+				.quadratic = 0.032f});
+		}
+
+		ImGui::SameLine();
+		if (ImGui::Button("Remove Point Light") && !point_lights.empty())
+		{
+			point_lights.pop_back();
+		}
+
+		if (ImGui::Button("Add Spot Light") && spot_lights.size() < max_lights)
+		{
+			if (spot_lights.size() < max_lights)
+			{
+				spot_lights.push_back(SpotLight{
+					.position = {0.0f, -5.0f, 0.0f},
+					.direction = {0.0f, -1.0f, 0.0f},
+					.color = {1.0f, 1.0f, 0.0f},
+					.intensity = 1.5f,
+					.cutOff = cos(toRadians(30.0f)),
+					.outerCutOff = cos(toRadians(45.0f)),
+					.constant = 1.0f,
+					.linear = 0.09f,
+					.quadratic = 0.032f});
+			}
+			else
+			{
+				printf("FAILED: max lights reached\n");
+			}
+			/* spot_lights.push_back(SpotLight{
+				.position = {0.0f, -5.0f, 0.0f},
+				.direction = {0.0f, -1.0f, 0.0f},
+				.color = {1.0f, 1.0f, 0.0f},
+				.intensity = 1.5f,
+				.cutOff = cos(toRadians(30.0f)),
+				.outerCutOff = cos(toRadians(45.0f)),
+				.constant = 1.0f,
+				.linear = 0.09f,
+				.quadratic = 0.032f}); */
+		}
+
+		ImGui::SameLine();
+		if (ImGui::Button("Remove Spot Light") && !spot_lights.empty())
+		{
+			spot_lights.pop_back();
+		}
+
+		ImGui::End();
 
 		// 👇 ОСТАЛЬНАЯ ЧАСТЬ ФУНКЦИИ update() БЕЗ ИЗМЕНЕНИЙ:
 		if (!ImGui::IsWindowHovered())
@@ -1113,11 +1175,15 @@ ImGui::End();
 
 		// 👇 ОБНОВЛЯЕМ ДАННЫЕ СЦЕНЫ С УЧЕТОМ ИСТОЧНИКОВ СВЕТА:
 		float aspect_ratio = float(veekay::app.window_width) / float(veekay::app.window_height);
+
 		SceneUniforms scene_uniforms{
 			.view_projection = camera.view_projection(aspect_ratio),
 			.view_position = camera.position,
-			.point_light_count = uint32_t(point_lights.size()), //  ПЕРЕДАЕМ актуальное количество!
-			.spot_light_count = uint32_t(spot_lights.size())};
+			.point_light_count = uint32_t(point_lights.size()),
+			.spot_light_count = uint32_t(spot_lights.size()),
+			.directional_light_count = uint32_t(directional_lights.size()),
+			.ambientColor = ambientColor,
+			.ambientIntensity = ambientIntensity};
 
 		// 👇 ОБНОВЛЯЕМ SSBO С ИСТОЧНИКАМИ СВЕТА:
 		if (point_lights_ssbo && point_lights_ssbo->mapped_region)
@@ -1131,6 +1197,12 @@ ImGui::End();
 		{
 			memcpy(spot_lights_ssbo->mapped_region, spot_lights.data(),
 				   sizeof(SpotLight) * spot_lights.size());
+		}
+
+		if (directional_lights_ssbo && directional_lights_ssbo->mapped_region)
+		{
+			memcpy(directional_lights_ssbo->mapped_region, directional_lights.data(),
+				   sizeof(DirectionalLight) * directional_lights.size());
 		}
 		/* static int frame_count = 0;
 		frame_count++; */

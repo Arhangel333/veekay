@@ -11,13 +11,17 @@ layout(location = 0) in vec3 v_position;
 layout(location = 1) in vec3 v_normal;
 layout(location = 2) in vec2 v_uv;
 
-layout(binding = 0, std140) uniform SceneUniforms {
+layout(std140, binding = 0) uniform SceneUniforms {
     mat4 view_projection;
-    vec3 view_position;     // 👈 ДОБАВИМ ПОЗИЦИЮ КАМЕРЫ!
-	float _pad0;
+    vec3 view_position;
+    float _pad0;
     uint point_light_count;
-	uint spot_light_count;
-	float _pad1[2];
+    uint spot_light_count;
+    uint directional_light_count;
+    float _pad1;
+    vec3 ambientColor;
+    float ambientIntensity;
+    
 };
 
 layout(binding = 1, std140) uniform ModelUniforms {
