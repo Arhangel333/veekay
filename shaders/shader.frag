@@ -44,6 +44,7 @@ struct Material {
 layout(location = 0) in vec3 fragPosition;
 layout(location = 1) in vec3 fragNormal;
 layout(location = 2) in vec3 fragColor;
+layout(location = 3) in vec2 fragUV;
 
 layout(std140, binding = 0) uniform SceneUniforms {
     mat4 view_projection;
@@ -64,6 +65,9 @@ layout(binding = 1) uniform ModelUniforms {
     Material material;
 };
 
+layout(binding = 2) uniform sampler2D texture_sampler;
+
+
 layout(set = 1, binding = 0) readonly buffer PointLightsSSBO {
     PointLight point_lights[];
 };
@@ -78,12 +82,12 @@ layout(set = 1, binding = 2, std430) readonly buffer DirectionalLightsSSBO {
 
 layout(location = 0) out vec4 outColor;
 
-vec3 calculatePointLight(PointLight light, vec3 normal, vec3 fragPos, vec3 viewDir) {
+vec3 calculatePointLight(PointLight light, vec3 normal, vec3 fragPos, vec3 viewDir, vec4 texColor) {
     vec3 lightDir = normalize(light.position - fragPos);
     
     // Диффузная составляющая
     float diff = max(dot(normal, lightDir), 0.0);
-    vec3 diffuse = light.color * diff * light.intensity;
+    vec3 diffuse = light.color * diff * light.intensity * material.albedo * texColor.rgb;
     
     // 👇 SPECULAR - БЛИНН-ФОНГ (ИСПРАВЛЕНО)
     vec3 halfDir = normalize(lightDir + viewDir);
@@ -98,7 +102,7 @@ vec3 calculatePointLight(PointLight light, vec3 normal, vec3 fragPos, vec3 viewD
     return (diffuse + specular) * attenuation;
 }
 
-vec3 calculateSpotLight(SpotLight light, vec3 normal, vec3 fragPos, vec3 viewDir) {
+vec3 calculateSpotLight(SpotLight light, vec3 normal, vec3 fragPos, vec3 viewDir, vec4 texColor) {
     vec3 lightDir = normalize(light.position - fragPos);
     
     // Проверка угла
@@ -109,7 +113,7 @@ vec3 calculateSpotLight(SpotLight light, vec3 normal, vec3 fragPos, vec3 viewDir
     if (theta > light.outerCutOff) {
         // Диффуз
         float diff = max(dot(normal, lightDir), 0.0);
-        vec3 diffuse = light.color * diff * light.intensity;
+        vec3 diffuse = light.color * diff * light.intensity * material.albedo * texColor.rgb;
         
         // Specular (Блинн-Фонг)
         vec3 halfDir = normalize(lightDir + viewDir);
@@ -127,12 +131,12 @@ vec3 calculateSpotLight(SpotLight light, vec3 normal, vec3 fragPos, vec3 viewDir
     return vec3(0.0);
 }
 
-vec3 calculateDirectionalLight(DirectionalLight light, vec3 normal, vec3 viewDir) {
+vec3 calculateDirectionalLight(DirectionalLight light, vec3 normal, vec3 viewDir, vec4 texColor) {
     vec3 lightDir = normalize(-light.direction);
     
     // Диффузная составляющая
     float diff = max(dot(normal, lightDir), 0.0);
-    vec3 diffuse = light.color * diff * light.intensity;
+    vec3 diffuse = light.color * diff * light.intensity * material.albedo * texColor.rgb;
     
     // Specular (Блинн-Фонг)
     vec3 halfDir = normalize(lightDir + viewDir);
@@ -145,31 +149,34 @@ vec3 calculateDirectionalLight(DirectionalLight light, vec3 normal, vec3 viewDir
 void main() {
     vec3 normal = normalize(fragNormal);
     vec3 viewDir = normalize(view_position - fragPosition);
+    vec4 texColor = texture(texture_sampler, fragUV);
     
     
-    vec3 ambient = ambientColor * ambientIntensity * material.albedo;
+    //vec3 ambient = ambientColor * ambientIntensity * material.albedo;
+    vec3 ambient = ambientColor * ambientIntensity * material.albedo * texColor.rgb;
 
 
-    vec3 result = ambient ;
+    vec3 result = ambient;
 
 
     // 👇 НАПРАВЛЕННЫЙ СВЕТ (Блинн-Фонг)
     for (int i = 0; i < directional_light_count; i++) {
-        result += calculateDirectionalLight(directional_lights[i], normal, viewDir);
+        result += calculateDirectionalLight(directional_lights[i], normal, viewDir, texColor);
     }
 
     // 👇 ТОЧЕЧНЫЕ ИСТОЧНИКИ (теперь используют Блинн-Фонг)
     for (int i = 0; i < point_light_count; i++) {
-        result += calculatePointLight(point_lights[i], normal, fragPosition, viewDir);
+        result += calculatePointLight(point_lights[i], normal, fragPosition, viewDir, texColor);
     }
     
     for (int i = 0; i < spot_light_count; i++) {
-        result += calculateSpotLight(spot_lights[i], normal, fragPosition, viewDir);
+        result += calculateSpotLight(spot_lights[i], normal, fragPosition, viewDir, texColor);
     }
+
+    
 
     outColor = vec4(result, 1.0);
 
-    
     
     
 }

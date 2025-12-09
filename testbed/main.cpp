@@ -132,7 +132,7 @@ namespace
 		uint32_t spot_light_count;		  // 4 bytes
 		uint32_t directional_light_count; // 4 bytes (12)
 		float _pad1[1];
-		veekay::vec3 ambientColor;		  // 12 bytes
+		veekay::vec3 ambientColor; // 12 bytes
 		float ambientIntensity;
 	};
 
@@ -273,7 +273,7 @@ namespace
 	{
 		std::ifstream file(path, std::ios::binary | std::ios::ate);
 		size_t size = file.tellg();
-		//printf("shader %s size: %d\n", path, (int)size);
+		// printf("shader %s size: %d\n", path, (int)size);
 		std::vector<uint32_t> buffer(size / sizeof(uint32_t));
 		file.seekg(0);
 		file.read(reinterpret_cast<char *>(buffer.data()), size);
@@ -465,12 +465,12 @@ namespace
 					},
 					{
 						.type = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, //  ДЛЯ SSBO!
-						.descriptorCount = 2,					   //  2 слота для SSBO
+						.descriptorCount = 3,					   //  2 слота для SSBO
 					}};
 
 				VkDescriptorPoolCreateInfo info{
 					.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO,
-					.maxSets = 2, //  УВЕЛИЧИВАЕМ до 2 (UBO + SSBO)
+					.maxSets = 4,
 					.poolSizeCount = sizeof(pools) / sizeof(pools[0]),
 					.pPoolSizes = pools,
 				};
@@ -498,6 +498,12 @@ namespace
 						.descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER_DYNAMIC,
 						.descriptorCount = 1,
 						.stageFlags = VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT,
+					},
+					{
+						.binding = 2,
+						.descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
+						.descriptorCount = 1,
+						.stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT,
 					},
 				};
 
@@ -570,7 +576,6 @@ namespace
 				}
 			}
 
-			// 👇 СОЗДАЕМ МАССИВ макетов дескрипторов
 			VkDescriptorSetLayout descriptor_set_layouts[] = {
 				descriptor_set_layout, //  Первый: для UBO (камера, материалы)
 				ssbo_descriptor_set_layout};
@@ -589,15 +594,6 @@ namespace
 				veekay::app.running = false;
 				return;
 			}
-
-			// Создаём layout для Set 2 (прожекторы)
-
-			// В initialize() - посмотри что в массиве:
-			/* printf("Pipeline layout sets: %d\n", layout_info.setLayoutCount);
-			for (uint32_t i = 0; i < layout_info.setLayoutCount; i++)
-			{
-				printf("Set %d: %p\n", i, (void *)descriptor_set_layouts[i]);
-			} */
 
 			VkGraphicsPipelineCreateInfo info{
 				.sType = VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO,
@@ -677,6 +673,51 @@ namespace
 															pixels);
 		}
 
+		
+		// В initialize(), после создания missing_texture:
+		{
+			std::vector<unsigned char> image;
+			unsigned width, height;
+
+			// Загружаем PNG
+			unsigned error = lodepng::decode(image, width, height, "textures/i.png");  //cyber.png
+			if (error)
+			{
+				std::cerr << "Failed to load texture: " << lodepng_error_text(error) << std::endl;
+				texture = missing_texture;
+				texture_sampler = missing_texture_sampler;
+			}
+			else
+			{
+				// Создаем текстуру из загруженного изображения
+				texture = new veekay::graphics::Texture(
+					cmd,
+					width,
+					height,
+					VK_FORMAT_R8G8B8A8_UNORM,
+					image.data());
+
+				// Создаем нормальный сэмплер (сейчас у texture_sampler нет создания!)
+				VkSamplerCreateInfo sampler_info{
+					.sType = VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO,
+					.magFilter = VK_FILTER_LINEAR,
+					.minFilter = VK_FILTER_LINEAR,
+					.mipmapMode = VK_SAMPLER_MIPMAP_MODE_LINEAR,
+					.addressModeU = VK_SAMPLER_ADDRESS_MODE_REPEAT,
+					.addressModeV = VK_SAMPLER_ADDRESS_MODE_REPEAT,
+					.addressModeW = VK_SAMPLER_ADDRESS_MODE_REPEAT,
+					.anisotropyEnable = VK_TRUE,
+					.maxAnisotropy = 16.0f,
+				};
+
+				if (vkCreateSampler(device, &sampler_info, nullptr, &texture_sampler) != VK_SUCCESS)
+				{
+					std::cerr << "Failed to create texture sampler\n";
+					texture_sampler = missing_texture_sampler;
+				}
+			}
+		}
+
 		{
 			VkDescriptorBufferInfo buffer_infos[] = {
 				{
@@ -714,6 +755,26 @@ namespace
 
 			vkUpdateDescriptorSets(device, sizeof(write_infos) / sizeof(write_infos[0]),
 								   write_infos, 0, nullptr);
+		}
+
+		{
+			VkDescriptorImageInfo texture_image_info{
+				.sampler = texture_sampler,
+				.imageView = texture->view,
+				.imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+			};
+
+			VkWriteDescriptorSet texture_write{
+				.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
+				.dstSet = descriptor_set,
+				.dstBinding = 2, // Binding 2 для текстуры
+				.dstArrayElement = 0,
+				.descriptorCount = 1,
+				.descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
+				.pImageInfo = &texture_image_info,
+			};
+
+			vkUpdateDescriptorSets(device, 1, &texture_write, 0, nullptr);
 		}
 
 		// NOTE: Plane mesh initialization
@@ -891,8 +952,8 @@ namespace
 			.direction = {0.0f, -1.0f, 0.0f},
 			.color = {1.0f, 1.0f, 0.0f}, // Желтый прожектор
 			.intensity = 1.5f,
-			.cutOff = cos(toRadians(30.0f)),
-			.outerCutOff = cos(toRadians(45.0f)),
+			.cutOff = float(cos(toRadians(30.0f))),
+			.outerCutOff = float(cos(toRadians(45.0f))),
 			.constant = 1.0f,
 			.linear = 0.09f,
 			.quadratic = 0.032f});
@@ -999,8 +1060,10 @@ namespace
 		vkDestroyPipelineLayout(device, pipeline_layout, nullptr);
 		vkDestroyShaderModule(device, fragment_shader_module, nullptr);
 		vkDestroyShaderModule(device, vertex_shader_module, nullptr);
+		vkDestroySampler(device, texture_sampler, nullptr);
 
 		delete directional_lights_ssbo;
+		delete texture;
 	}
 
 	void update(double time)
@@ -1100,10 +1163,10 @@ namespace
 				float outerCutOff_deg = acos(spot_lights[i].outerCutOff) * 180.0f / M_PI;
 
 				if (ImGui::DragFloat("CutOff (degrees)", &cutOff_deg, 1.0f, 0.0f, 90.0f))
-					spot_lights[i].cutOff = cos(toRadians(cutOff_deg));
+					spot_lights[i].cutOff = float(cos(toRadians(cutOff_deg)));
 
 				if (ImGui::DragFloat("OuterCutOff (degrees)", &outerCutOff_deg, 1.0f, 0.0f, 90.0f))
-					spot_lights[i].outerCutOff = cos(toRadians(outerCutOff_deg));
+					spot_lights[i].outerCutOff = float(cos(toRadians(outerCutOff_deg)));
 			}
 			ImGui::PopID();
 		}
@@ -1137,8 +1200,8 @@ namespace
 					.direction = {0.0f, -1.0f, 0.0f},
 					.color = {1.0f, 1.0f, 0.0f},
 					.intensity = 1.5f,
-					.cutOff = cos(toRadians(30.0f)),
-					.outerCutOff = cos(toRadians(45.0f)),
+					.cutOff = float(cos(toRadians(30.0f))),
+					.outerCutOff = float(cos(toRadians(45.0f))),
 					.constant = 1.0f,
 					.linear = 0.09f,
 					.quadratic = 0.032f});
@@ -1147,16 +1210,6 @@ namespace
 			{
 				printf("FAILED: max lights reached\n");
 			}
-			/* spot_lights.push_back(SpotLight{
-				.position = {0.0f, -5.0f, 0.0f},
-				.direction = {0.0f, -1.0f, 0.0f},
-				.color = {1.0f, 1.0f, 0.0f},
-				.intensity = 1.5f,
-				.cutOff = cos(toRadians(30.0f)),
-				.outerCutOff = cos(toRadians(45.0f)),
-				.constant = 1.0f,
-				.linear = 0.09f,
-				.quadratic = 0.032f}); */
 		}
 
 		ImGui::SameLine();
@@ -1204,8 +1257,6 @@ namespace
 			memcpy(directional_lights_ssbo->mapped_region, directional_lights.data(),
 				   sizeof(DirectionalLight) * directional_lights.size());
 		}
-		/* static int frame_count = 0;
-		frame_count++; */
 
 		ImGui::Begin("Debug Info");
 
@@ -1245,10 +1296,6 @@ namespace
 			}
 			auto view = camera.view();
 
-			// TODO: Calculate right, up and front from view matrix
-			/* veekay::vec3 right = {1.0f, 0.0f, 0.0f};
-			veekay::vec3 up = {0.0f, -1.0f, 0.0f};*/
-			// veekay::vec3 front = {0.0f, 0.0f, 1.0f};
 
 			// Вычисляем векторы направления из матрицы вида
 			veekay::vec3 right = {view[0][0], view[1][0], view[2][0]};

@@ -34,6 +34,7 @@ layout(binding = 1, std140) uniform ModelUniforms {
 layout(location = 0) out vec3 fragPosition;    // Позиция в мировых координатах
 layout(location = 1) out vec3 fragNormal;      // Нормаль в мировых координатах  
 layout(location = 2) out vec3 fragColor;       // Цвет материала
+layout(location = 3) out vec2 fragUV;       // Цвет текстуры
 
 void main() {
     // 👇 ПРАВИЛЬНОЕ ПРЕОБРАЗОВАНИЕ ПОЗИЦИИ
@@ -46,4 +47,5 @@ void main() {
     // Передаём данные для освещения
     fragPosition = worldPosition.xyz;
     fragColor = material.albedo;
+    fragUV = v_uv;
 }
