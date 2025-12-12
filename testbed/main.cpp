@@ -12,6 +12,13 @@
 #include <imgui.h>
 #include <lodepng.h>
 
+#define GLM_FORCE_RADIANS
+#define GLM_FORCE_DEPTH_ZERO_TO_ONE // Z [0, 1] вместо [-1, 1]
+#define GLM_FORCE_LEFT_HANDED		// Левая система координат
+#include <glm/glm.hpp>
+#include <glm/gtc/matrix_transform.hpp>
+#include <glm/gtc/type_ptr.hpp>
+
 namespace
 {
 
@@ -144,6 +151,8 @@ namespace
 			.position = {0.0f, -0.5f, -3.0f} // {0.0f, -0.5f, -3.0f}
 		};
 
+		VkImageLayout shadow_map_layout = VK_IMAGE_LAYOUT_UNDEFINED;
+
 		std::vector<Model> models;
 
 		// SSBO для точечных источников света
@@ -200,6 +209,9 @@ namespace
 		VkPipeline shadow_pipeline;
 		VkShaderModule shadow_vert_shader;
 		VkPipelineLayout shadow_pipeline_layout;
+		VkRenderPass shadow_render_pass;
+		VkFramebuffer shadow_framebuffer;
+		veekay::mat4 curr_light_view_projection;
 	}
 
 	float toRadians(float degrees)
@@ -225,64 +237,126 @@ namespace
 		return 0;
 	}
 
-	// ДОБАВЬТЕ ЭТИ ФУНКЦИИ где-то в начале файла, например после findMemoryType:
-	veekay::mat4 lookAt(const veekay::vec3 &eye, const veekay::vec3 &target, const veekay::vec3 &up)
+	veekay::vec4 cross(const veekay::vec4 &a, const veekay::vec4 &b)
 	{
-		// Простая реализация lookAt матрицы
-		veekay::vec3 f = {
-			target.x - eye.x,
-			target.y - eye.y,
-			target.z - eye.z};
-
-		// Нормализуем forward вектор
-		float len = std::sqrt(f.x * f.x + f.y * f.y + f.z * f.z);
-		if (len > 0)
-		{
-			f.x /= len;
-			f.y /= len;
-			f.z /= len;
-		}
-
-		// Right = up × forward
-		veekay::vec3 r = {
-			up.y * f.z - up.z * f.y,
-			up.z * f.x - up.x * f.z,
-			up.x * f.y - up.y * f.x};
-
-		// Нормализуем right
-		len = std::sqrt(r.x * r.x + r.y * r.y + r.z * r.z);
-		if (len > 0)
-		{
-			r.x /= len;
-			r.y /= len;
-			r.z /= len;
-		}
-
-		// Up = forward × right
-		veekay::vec3 u = {
-			f.y * r.z - f.z * r.y,
-			f.z * r.x - f.x * r.z,
-			f.x * r.y - f.y * r.x};
-
-		veekay::mat4 result = {
-			r.x, r.y, r.z, -(r.x * eye.x + r.y * eye.y + r.z * eye.z),
-			u.x, u.y, u.z, -(u.x * eye.x + u.y * eye.y + u.z * eye.z),
-			f.x, f.y, f.z, -(f.x * eye.x + f.y * eye.y + f.z * eye.z),
-			0.0f, 0.0f, 0.0f, 1.0f};
-
+		veekay::vec4 result;
+		result.x = a.y * b.z - a.z * b.y;
+		result.y = a.z * b.x - a.x * b.z;
+		result.z = a.x * b.y - a.y * b.x;
+		result.w = 0.0f; // Вектор, не точка!
 		return result;
+	}
+
+	veekay::vec3 cross(const veekay::vec3 &a, const veekay::vec3 &b)
+	{
+		veekay::vec3 result;
+		result.x = a.y * b.z - a.z * b.y;
+		result.y = a.z * b.x - a.x * b.z;
+		result.z = a.x * b.y - a.y * b.x;
+		return result;
+	}
+
+	veekay::vec4 multiplyVec4Mat4(const veekay::vec4 &v, const veekay::mat4 &m)
+			{
+				return veekay::vec4{
+					v.x * m[0][0] + v.y * m[1][0] + v.z * m[2][0] + v.w * m[3][0],
+					v.x * m[0][1] + v.y * m[1][1] + v.z * m[2][1] + v.w * m[3][1],
+					v.x * m[0][2] + v.y * m[1][2] + v.z * m[2][2] + v.w * m[3][2],
+					v.x * m[0][3] + v.y * m[1][3] + v.z * m[2][3] + v.w * m[3][3]};
+			}
+
+	veekay::mat4 lookAt(const veekay::vec3& eye, const veekay::vec3& target, const veekay::vec3& up_dir)
+{
+
+	// 1. Forward = normalize(target - eye)
+    veekay::vec3 f = target - eye;
+    float len_f = sqrt(f.x*f.x + f.y*f.y + f.z*f.z);
+    if (len_f > 0.0001f) {
+        f.x /= len_f; f.y /= len_f; f.z /= len_f;
+    } else {
+        f = {0.0f, 0.0f, 1.0f};
+    }
+    
+    // 2. Right = normalize(cross(f, up_dir))
+    veekay::vec3 r = {
+        f.y * up_dir.z - f.z * up_dir.y,
+        f.z * up_dir.x - f.x * up_dir.z,
+        f.x * up_dir.y - f.y * up_dir.x
+    };
+    
+    float len_r = sqrt(r.x*r.x + r.y*r.y + r.z*r.z);
+    if (len_r > 0.0001f) {
+        r.x /= len_r; r.y /= len_r; r.z /= len_r;
+    } else {
+        r = {1.0f, 0.0f, 0.0f};
+    }
+    
+    // 3. Up = cross(r, f) - уже ортогонален
+    veekay::vec3 u = {
+        r.y * f.z - r.z * f.y,
+        r.z * f.x - r.x * f.z,
+        r.x * f.y - r.y * f.x
+    };
+    
+    // НЕ инвертируем u для Vulkan! View матрица одинакова!
+    // Инверсия Y делается в проекционной матрице!
+    
+    // 4. Translation = -dot(axis, eye)
+    float tx = -(r.x * eye.x + r.y * eye.y + r.z * eye.z);
+    float ty = -(u.x * eye.x + u.y * eye.y + u.z * eye.z);
+    float tz = -(f.x * eye.x + f.y * eye.y + f.z * eye.z);
+    
+    // 5. Row-major матрица
+    return veekay::mat4{
+        r.x, r.y, r.z, tx,   // Строка 0: right
+        u.x, u.y, u.z, ty,   // Строка 1: up
+        f.x, f.y, f.z, tz,   // Строка 2: forward
+        0.0f, 0.0f, 0.0f, 1.0f
+    };
+}
+
+	// Добавьте где-нибудь в начале файла (после includes)
+	void printMatrix(const char *name, const veekay::mat4 &m)
+	{
+		printf("\n=== %s ===\n", name);
+
+		for (size_t i = 0; i < 4; i++)
+		{
+			printf("[");
+			for (size_t j = 0; j < 4; j++)
+			{
+				printf("%8.3f ", m[i][j]);
+			}
+			printf("]\n");
+		}
+		printf("\n");
+	}
+
+	void printVector3(const char *name, const veekay::vec3 &v)
+	{
+		printf("%s: [%6.2f %6.2f %6.2f]\n", name, v.x, v.y, v.z);
+	}
+
+	void printVector4(const char *name, const veekay::vec4 &v)
+	{
+		printf("%s: [%6.2f %6.2f %6.2f %6.2f]\n", name, v.x, v.y, v.z, v.w);
 	}
 
 	veekay::mat4 orthographic(float left, float right, float bottom, float top, float near, float far)
-	{
-		veekay::mat4 result = {
-			2.0f / (right - left), 0.0f, 0.0f, -(right + left) / (right - left),
-			0.0f, 2.0f / (top - bottom), 0.0f, -(top + bottom) / (top - bottom),
-			0.0f, 0.0f, -1.0f / (far - near), -near / (far - near),
-			0.0f, 0.0f, 0.0f, 1.0f};
-
-		return result;
-	}
+{
+    // Vulkan: Y вниз, Z [0, 1]
+    float rl = right - left;
+    float tb = top - bottom;    // top - bottom!
+    float fn = near - far;
+    
+    // Row-major матрица:
+    return veekay::mat4{
+        2.0f / rl, 0.0f, 0.0f, -(right + left) / rl,           // Строка 0: X
+        0.0f, -2.0f / tb, 0.0f, (top + bottom) / tb,           // Строка 1: Y (минус для Vulkan!)
+        0.0f, 0.0f, 1.0f / fn, -near / fn,                     // Строка 2: Z
+        0.0f, 0.0f, 0.0f, 1.0f                                 // Строка 3
+    };
+}
 
 	// Добавим эти функции если их нет в veekay
 	veekay::mat4 rotation_x(float angle)
@@ -381,9 +455,89 @@ namespace
 		return result;
 	}
 
+	void barier_to_Read(VkImageLayout &shadow_map_layout, VkCommandBuffer cmd)
+	{
+		if (shadow_map_layout == VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL)
+		{
+			printf("ERROR: Expected ATTACHMENT layout, but got: %i\n", shadow_map_layout);
+			return; // или assert
+		}
+		printf("Need ATTACHMENT Now: %i\n", shadow_map_layout);
+		VkImageMemoryBarrier barrier_to_read = {
+			.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER,
+			.srcAccessMask = VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT,
+			.dstAccessMask = VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_READ_BIT,
+			.oldLayout = shadow_map_layout,
+			.newLayout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL,
+			.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
+			.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
+			.image = shadow_depth_image,
+			.subresourceRange = {
+				.aspectMask = VK_IMAGE_ASPECT_DEPTH_BIT,
+				.baseMipLevel = 0,
+				.levelCount = 1,
+				.baseArrayLayer = 0,
+				.layerCount = 1,
+			},
+		};
+
+		shadow_map_layout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL;
+
+		printf("Set READ_ONLY Now: %i\n", shadow_map_layout);
+
+		vkCmdPipelineBarrier(cmd,
+							 VK_PIPELINE_STAGE_LATE_FRAGMENT_TESTS_BIT,
+							 VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT,
+							 0,
+							 0, nullptr,
+							 0, nullptr,
+							 1, &barrier_to_read);
+		return;
+	}
+
+	void barier_to_Write(VkImageLayout &shadow_map_layout, VkCommandBuffer cmd)
+	{
+		if (shadow_map_layout == VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL)
+		{
+			printf("ERROR: Expected READ_ONLY layout, but got: %i\n", shadow_map_layout);
+			return; // или assert
+		}
+		printf("Need READ_ONLY Now: %i\n", shadow_map_layout);
+		// Переход shadow map в layout для записи глубины
+		VkImageMemoryBarrier barrier_to_write = {
+			.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER,
+			.srcAccessMask = VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_READ_BIT,
+			.dstAccessMask = VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT,
+			.oldLayout = shadow_map_layout,
+			.newLayout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL,
+			.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
+			.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
+			.image = shadow_depth_image,
+			.subresourceRange = {
+				.aspectMask = VK_IMAGE_ASPECT_DEPTH_BIT,
+				.baseMipLevel = 0,
+				.levelCount = 1,
+				.baseArrayLayer = 0,
+				.layerCount = 1,
+			},
+
+		};
+
+		shadow_map_layout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL;
+		printf("Set ATTACHMENT Now: %i\n", shadow_map_layout);
+
+		vkCmdPipelineBarrier(cmd,
+							 VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT,
+							 VK_PIPELINE_STAGE_EARLY_FRAGMENT_TESTS_BIT,
+							 0,
+							 0, nullptr,
+							 0, nullptr,
+							 1, &barrier_to_write);
+		return;
+	}
+
 	void initialize(VkCommandBuffer cmd)
 	{
-		std::cout << "=== initialize START ===" << std::endl;
 
 		VkDevice &device = veekay::app.vk_device;
 		VkPhysicalDevice &physical_device = veekay::app.vk_physical_device;
@@ -730,16 +884,13 @@ namespace
 			VkPushConstantRange push_constant_range{
 				.stageFlags = VK_SHADER_STAGE_VERTEX_BIT,
 				.offset = 0,
-				.size = sizeof(veekay::mat4),
+				.size = sizeof(veekay::mat4) * 2,
 			};
-
-			
-			
 
 			VkPipelineLayoutCreateInfo layout_info{
 				.sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO,
-				.setLayoutCount = 1,
-				.pSetLayouts = &descriptor_set_layout,
+				.setLayoutCount = 0,
+				.pSetLayouts = nullptr,
 				.pushConstantRangeCount = 1,
 				.pPushConstantRanges = &push_constant_range,
 			};
@@ -748,117 +899,6 @@ namespace
 									   nullptr, &shadow_pipeline_layout) != VK_SUCCESS)
 			{
 				std::cerr << "Failed to create Vulkan shadow pipeline layout\n";
-				veekay::app.running = false;
-				return;
-			}
-		}
-
-		// 3. Создаем shadow pipeline
-		{
-			VkPipelineShaderStageCreateInfo shadow_stage{
-				.sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO,
-				.stage = VK_SHADER_STAGE_VERTEX_BIT,
-				.module = shadow_vert_shader,
-				.pName = "main",
-			};
-
-			VkVertexInputAttributeDescription shadow_attributes[] = {
-				{.location = 0,
-				 .binding = 0,
-				 .format = VK_FORMAT_R32G32B32_SFLOAT,
-				 .offset = offsetof(Vertex, position)}};
-
-			VkPipelineVertexInputStateCreateInfo shadow_input_state_info{
-				.sType = VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO,
-				.vertexBindingDescriptionCount = 1,
-				.pVertexBindingDescriptions = &buffer_binding,
-				.vertexAttributeDescriptionCount = 1,
-				.pVertexAttributeDescriptions = shadow_attributes,
-			};
-
-			/* VkPipelineRasterizationStateCreateInfo raster_info{
-				.sType = VK_STRUCTURE_TYPE_PIPELINE_RASTERIZATION_STATE_CREATE_INFO,
-				.pNext = nullptr,
-				.flags = 0,
-				.polygonMode = VK_POLYGON_MODE_FILL,
-				.cullMode = VK_CULL_MODE_BACK_BIT,
-				.frontFace = VK_FRONT_FACE_CLOCKWISE,
-				.depthBiasEnable = VK_TRUE,
-				.depthBiasConstantFactor = 2.0f,
-				.depthBiasClamp = 0.0f,
-				.depthBiasSlopeFactor = 2.0f,
-				.lineWidth = 1.0f,
-			}; */
-
-			VkPipelineRasterizationStateCreateInfo shadow_raster_info{
-				.sType = VK_STRUCTURE_TYPE_PIPELINE_RASTERIZATION_STATE_CREATE_INFO,
-				.depthClampEnable = VK_FALSE,
-				.rasterizerDiscardEnable = VK_FALSE,
-				.polygonMode = VK_POLYGON_MODE_FILL,
-				.cullMode = VK_CULL_MODE_BACK_BIT,
-				.frontFace = VK_FRONT_FACE_CLOCKWISE,
-				.depthBiasEnable = VK_TRUE,
-				.depthBiasConstantFactor = 2.0f,
-				.depthBiasClamp = 0.0f,
-				.depthBiasSlopeFactor = 2.0f,
-				.lineWidth = 1.0f,
-			};
-			/*
-						VkPipelineDepthStencilStateCreateInfo depth_info{
-							.sType = VK_STRUCTURE_TYPE_PIPELINE_DEPTH_STENCIL_STATE_CREATE_INFO,
-							.depthTestEnable = true,
-							.depthWriteEnable = true,
-							.depthCompareOp = VK_COMPARE_OP_LESS_OR_EQUAL,
-						}; */
-
-			VkPipelineDepthStencilStateCreateInfo shadow_depth_info{
-				.sType = VK_STRUCTURE_TYPE_PIPELINE_DEPTH_STENCIL_STATE_CREATE_INFO,
-				.depthTestEnable = VK_TRUE,
-				.depthWriteEnable = VK_TRUE,
-				.depthCompareOp = VK_COMPARE_OP_LESS_OR_EQUAL,
-				.depthBoundsTestEnable = VK_FALSE,
-				.stencilTestEnable = VK_FALSE,
-			};
-
-			// Динамический рендеринг для shadow pass
-			VkPipelineRenderingCreateInfo rendering_info{
-				.sType = VK_STRUCTURE_TYPE_PIPELINE_RENDERING_CREATE_INFO,
-				.depthAttachmentFormat = VK_FORMAT_D32_SFLOAT, // Формат shadow map
-			};
-
-			VkPipelineRenderingCreateInfo pipeline_rendering_info{
-				.sType = VK_STRUCTURE_TYPE_PIPELINE_RENDERING_CREATE_INFO,
-				.viewMask = 0,									// Для VR/multiview (0 = обычный рендеринг)
-				.colorAttachmentCount = 0,						// Сколько цветовых attachments (0 для теней)
-				.pColorAttachmentFormats = nullptr,				// Форматы цветовых attachments
-				.depthAttachmentFormat = VK_FORMAT_D32_SFLOAT,	// Формат буфера глубины
-				.stencilAttachmentFormat = VK_FORMAT_UNDEFINED, // Формат stencil
-			};
-
-			VkGraphicsPipelineCreateInfo shadow_pipeline_info{
-				.sType = VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO,
-				.pNext = &pipeline_rendering_info,
-				.stageCount = 1,
-				.pStages = &shadow_stage,
-				.pVertexInputState = &shadow_input_state_info,
-				.pInputAssemblyState = &assembly_state_info,
-				.pViewportState = &viewport_info,
-				.pRasterizationState = &shadow_raster_info,
-				.pMultisampleState = &sample_info,
-				.pDepthStencilState = &shadow_depth_info,
-				.pColorBlendState = nullptr,
-				.pDynamicState = nullptr,
-				.layout = shadow_pipeline_layout,
-				.renderPass = VK_NULL_HANDLE,
-				.subpass = 0,
-				.basePipelineHandle = VK_NULL_HANDLE,
-				.basePipelineIndex = -1,
-			};
-
-			if (vkCreateGraphicsPipelines(device, VK_NULL_HANDLE,
-										  1, &shadow_pipeline_info, nullptr, &shadow_pipeline) != VK_SUCCESS)
-			{
-				std::cerr << "Failed to create Vulkan shadow pipeline\n";
 				veekay::app.running = false;
 				return;
 			}
@@ -922,7 +962,7 @@ namespace
 			unsigned width, height;
 
 			// Загружаем PNG
-			unsigned error = lodepng::decode(image, width, height, "textures/i.png"); // cyber.png
+			unsigned error = lodepng::decode(image, width, height, "textures/mai.png"); // cyber.png
 			if (error)
 			{
 				std::cerr << "Failed to load texture: " << lodepng_error_text(error) << std::endl;
@@ -1035,6 +1075,129 @@ namespace
 				return;
 			}
 
+			{ // shadow_render_pass Создаем
+				VkAttachmentDescription depth_attachment = {
+					.format = VK_FORMAT_D32_SFLOAT,
+					.samples = VK_SAMPLE_COUNT_1_BIT,
+					.loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR,
+					.storeOp = VK_ATTACHMENT_STORE_OP_STORE,
+					.stencilLoadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE,
+					.stencilStoreOp = VK_ATTACHMENT_STORE_OP_DONT_CARE,
+					.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED,
+					.finalLayout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL,
+				};
+
+				VkAttachmentReference depth_attachment_ref = {
+					.attachment = 0,
+					.layout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL,
+				};
+
+				VkSubpassDescription subpass = {
+					.pipelineBindPoint = VK_PIPELINE_BIND_POINT_GRAPHICS,
+					.colorAttachmentCount = 0,
+					.pDepthStencilAttachment = &depth_attachment_ref,
+				};
+
+				VkRenderPassCreateInfo render_pass_info = {
+					.sType = VK_STRUCTURE_TYPE_RENDER_PASS_CREATE_INFO,
+					.attachmentCount = 1,
+					.pAttachments = &depth_attachment,
+					.subpassCount = 1,
+					.pSubpasses = &subpass,
+				};
+
+				vkCreateRenderPass(device, &render_pass_info, nullptr, &shadow_render_pass);
+			}
+
+			{ // 2. Создать shadow framebuffer
+				VkFramebufferCreateInfo fb_info = {
+					.sType = VK_STRUCTURE_TYPE_FRAMEBUFFER_CREATE_INFO,
+					.renderPass = shadow_render_pass,
+					.attachmentCount = 1,
+					.pAttachments = &shadow_depth_view,
+					.width = 1024,
+					.height = 1024,
+					.layers = 1,
+				};
+
+				vkCreateFramebuffer(device, &fb_info, nullptr, &shadow_framebuffer);
+			}
+
+			// 3. Создаем shadow pipeline
+			{
+				VkPipelineShaderStageCreateInfo shadow_stage{
+					.sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO,
+					.stage = VK_SHADER_STAGE_VERTEX_BIT,
+					.module = shadow_vert_shader,
+					.pName = "main",
+				};
+
+				VkVertexInputAttributeDescription shadow_attributes[] = {
+					{.location = 0,
+					 .binding = 0,
+					 .format = VK_FORMAT_R32G32B32_SFLOAT,
+					 .offset = offsetof(Vertex, position)}};
+
+				VkPipelineVertexInputStateCreateInfo shadow_input_state_info{
+					.sType = VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO,
+					.vertexBindingDescriptionCount = 1,
+					.pVertexBindingDescriptions = &buffer_binding,
+					.vertexAttributeDescriptionCount = 1,
+					.pVertexAttributeDescriptions = shadow_attributes,
+				};
+
+				VkPipelineRasterizationStateCreateInfo shadow_raster_info{
+					.sType = VK_STRUCTURE_TYPE_PIPELINE_RASTERIZATION_STATE_CREATE_INFO,
+					.depthClampEnable = VK_FALSE,
+					.rasterizerDiscardEnable = VK_FALSE,
+					.polygonMode = VK_POLYGON_MODE_FILL,
+					.cullMode = VK_CULL_MODE_BACK_BIT,
+					.frontFace = VK_FRONT_FACE_CLOCKWISE,
+					.depthBiasEnable = VK_TRUE,
+					.depthBiasConstantFactor = 2.0f,
+					.depthBiasClamp = 0.0f,
+					.depthBiasSlopeFactor = 2.0f,
+					.lineWidth = 1.0f,
+				};
+
+				VkPipelineDepthStencilStateCreateInfo shadow_depth_info{
+					.sType = VK_STRUCTURE_TYPE_PIPELINE_DEPTH_STENCIL_STATE_CREATE_INFO,
+					.depthTestEnable = VK_TRUE,
+					.depthWriteEnable = VK_TRUE,
+					.depthCompareOp = VK_COMPARE_OP_LESS_OR_EQUAL,
+					.depthBoundsTestEnable = VK_FALSE,
+					.stencilTestEnable = VK_FALSE,
+				};
+
+				VkGraphicsPipelineCreateInfo shadow_pipeline_info{
+					.sType = VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO,
+					.pNext = nullptr,
+					.stageCount = 1,
+					.pStages = &shadow_stage,
+					.pVertexInputState = &shadow_input_state_info,
+					.pInputAssemblyState = &assembly_state_info,
+					.pViewportState = &viewport_info,
+					.pRasterizationState = &shadow_raster_info,
+					.pMultisampleState = &sample_info,
+					.pDepthStencilState = &shadow_depth_info,
+					.pColorBlendState = nullptr,
+					.pDynamicState = nullptr,
+					.layout = shadow_pipeline_layout,
+					.renderPass = shadow_render_pass,
+					.subpass = 0,
+					.basePipelineHandle = VK_NULL_HANDLE,
+					.basePipelineIndex = -1,
+				};
+
+				if (vkCreateGraphicsPipelines(device, VK_NULL_HANDLE,
+											  1, &shadow_pipeline_info, nullptr, &shadow_pipeline) != VK_SUCCESS)
+				{
+					std::cerr << "Failed to create Vulkan shadow pipeline\n";
+					veekay::app.running = false;
+					return;
+				}
+			}
+
 			// 4. Создаем Sampler с compareEnable
 			VkSamplerCreateInfo sampler_info{
 				.sType = VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO,
@@ -1064,7 +1227,7 @@ namespace
 			VkDescriptorImageInfo shadow_image_info{
 				.sampler = shadow_sampler,
 				.imageView = shadow_depth_view,
-				.imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+				.imageLayout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL,
 			};
 
 			VkWriteDescriptorSet shadow_write{
@@ -1255,9 +1418,9 @@ namespace
 		models.emplace_back(Model{
 			.mesh = plane_mesh,
 			.transform = Transform{},
-			//.albedo_color = veekay::vec3{1.0f, 1.0f, 1.0f}
+			//.albedo_color = veekay::vec3{1.0f, 1.0f, 1.0f} {0.0f, 0.0f, 0.0f},
 			.material = Material{
-				.albedo = {0.0f, 0.0f, 0.0f},
+				.albedo = {1.0f, 1.0f, 1.0f},
 				.specular = {0.5f, 0.5f, 0.5f},
 				.shininess = 60.0f}});
 
@@ -1319,6 +1482,12 @@ namespace
 			.constant = 1.0f,
 			.linear = 0.09f,
 			.quadratic = 0.032f});
+
+		directional_lights.push_back(DirectionalLight{
+			.direction = {1.0f, -1.0f, 0.0f},
+			.color = {1.0f, 1.0f, 1.0f}, // Желтый прожектор
+			.intensity = 1.5f,
+		});
 
 		// 2. Создаем SSBO буфер и заполняем его источниками света
 		point_lights_ssbo = new veekay::graphics::Buffer(
@@ -1396,12 +1565,41 @@ namespace
 
 			vkUpdateDescriptorSets(device, 1, &directional_write, 0, nullptr);
 		}
+		printf("Before init  Now: %i\n", shadow_map_layout);
+		// Переводим shadow map из UNDEFINED в READ_ONLY один раз при инициализации
+		VkImageMemoryBarrier init_barrier = {
+			.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER,
+			.srcAccessMask = 0,
+			.dstAccessMask = VK_ACCESS_SHADER_READ_BIT,
+			.oldLayout = VK_IMAGE_LAYOUT_UNDEFINED,
+			.newLayout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL,
+			.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
+			.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
+			.image = shadow_depth_image,
+			.subresourceRange = {
+				.aspectMask = VK_IMAGE_ASPECT_DEPTH_BIT,
+				.baseMipLevel = 0,
+				.levelCount = 1,
+				.baseArrayLayer = 0,
+				.layerCount = 1,
+			},
+		};
+
+		vkCmdPipelineBarrier(cmd, // ← cmd из параметра initialize()
+							 VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT,
+							 VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT,
+							 0,
+							 0, nullptr,
+							 0, nullptr,
+							 1, &init_barrier);
+		shadow_map_layout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL;
+		printf("After init  Now: %i\n", shadow_map_layout);
 	}
 
 	// NOTE: Destroy resources here, do not cause leaks in your program!
 	void shutdown()
 	{
-		std::cout << "=== shutdown START ===" << std::endl;
+
 		VkDevice &device = veekay::app.vk_device;
 
 		vkDestroySampler(device, missing_texture_sampler, nullptr);
@@ -1436,11 +1634,14 @@ namespace
 		vkDestroyImageView(device, shadow_depth_view, nullptr);
 		vkDestroyImage(device, shadow_depth_image, nullptr);
 		vkFreeMemory(device, shadow_depth_memory, nullptr);
+
+		vkDestroyFramebuffer(veekay::app.vk_device, shadow_framebuffer, nullptr);
+		vkDestroyRenderPass(veekay::app.vk_device, shadow_render_pass, nullptr);
 	}
 
 	void update(double time)
 	{
-		std::cout << "=== update START ===" << std::endl;
+
 		static float rotation_angle = 0.0f;
 		rotation_angle += 0.02f; // Медленное вращение
 
@@ -1485,7 +1686,7 @@ namespace
 		if (ImGui::Button("Add Directional Light") && directional_lights.size() < max_lights)
 		{
 			directional_lights.push_back(DirectionalLight{
-				.direction = {0.0f, 1.0f, 0.0f}, // Свет сверху
+				.direction = {0.0f, -1.0f, 0.0f}, // Свет сверху
 				.color = {1.0f, 1.0f, 1.0f},
 				.intensity = 0.8f});
 		}
@@ -1599,34 +1800,77 @@ namespace
 		// Рассчитываем матрицу для направленного источника света (ортографическая проекция)
 		veekay::mat4 light_view_projection;
 
+		// Если направление указывает вниз (y отрицательный), помещаем камеру ВЫШЕ
 		if (!directional_lights.empty())
 		{
-			// Используем первый направленный источник как источник теней
 			const auto &main_light = directional_lights[0];
 
-			// Матрица вида света (смотрим в направлении источника)
-			veekay::vec3 light_pos = veekay::vec3{0.0f, 5.0f, 0.0f}; // Позиция над сценой
-			veekay::vec3 light_target = light_pos + main_light.direction;
+			// 1. Нормализуем направление света
+			veekay::vec3 light_dir = main_light.direction;
+			float len = sqrt(light_dir.x * light_dir.x + light_dir.y * light_dir.y + light_dir.z * light_dir.z);
+			if (len > 0.0001f)
+			{
+				light_dir.x /= len;
+				light_dir.y /= len;
+				light_dir.z /= len;
+			}
 
-			auto light_view = lookAt(
-				light_pos,
-				light_target,
-				veekay::vec3{0.0f, 1.0f, 0.0f});
+			// 2. Позиция камеры: отступаем от цели против направления света
+			float camera_distance = 10.0f;
+			veekay::vec3 target = {0.0f, 0.0f, 0.0f}; // Всегда смотрим в центр сцены
 
-			// Ортографическая проекция (охватывает всю сцену)
-			float size = 10.0f;
-			auto light_projection = orthographic(
-				-size, size, // left, right
-				-size, size, // bottom, top
-				0.1f, 20.0f	 // near, far
-			);
+			veekay::vec3 camera_pos = {
+				target.x - light_dir.x * camera_distance,
+				target.y - light_dir.y * camera_distance,
+				target.z - light_dir.z * camera_distance};
 
-			light_view_projection = light_projection * light_view;
+			// 3. Выбираем вектор "вверх", который не параллелен направлению взгляда
+			// Направление взгляда камеры = из camera_pos в target = light_dir
+			veekay::vec3 forward = light_dir; // Камера смотрит в том же направлении что и свет
+
+			veekay::vec3 up;
+
+			// Проверяем, не параллелен ли forward оси Y (основной кандидат на "верх")
+			if (fabs(forward.y) < 0.9f)
+			{
+				// forward не вертикальный - можно использовать ось Y как "верх"
+				up = {0.0f, 1.0f, 0.0f};
+			}
+			else
+			{
+				// forward почти вертикальный - используем ось Z как "верх"
+				up = {0.0f, 0.0f, 1.0f};
+			}
+			float size = 50.0f;
+
+			auto light_view = lookAt(camera_pos, target, up);
+			auto light_projection = orthographic(-size, size, -size, size, 1.0f, 50.0f);
+
+			light_view_projection = light_view * light_projection;
+			curr_light_view_projection = light_view_projection;
+
+			/* printMatrix("LookAt", light_view);
+			printMatrix("orthographic", light_projection); */
+			//printMatrix("curr_light_view_projection Updata", curr_light_view_projection);
+
 		}
 		else
 		{
 			// Если нет направленных источников, используем дефолтную матрицу
-			light_view_projection = veekay::mat4::identity();
+			// Если нет направленных источников, ВСЕ РАВНО создаем камеру сверху!
+			veekay::vec3 camera_pos = {0.0f, 30.0f, 0.0f};
+			veekay::vec3 target = {0.0f, 0.0f, 0.0f};
+			veekay::vec3 up = {0.0f, 0.0f, 1.0f};
+			float size = 50.0f;
+
+			auto light_view = lookAt(camera_pos, target, up);
+			// printMatrix("light_view", light_view);
+			auto light_projection = orthographic(-size, size, -size, size, 1.0f, 100.0f);
+			// printMatrix("light_projection", light_projection);
+
+			light_view_projection = light_view * light_projection;
+
+			// printMatrix("light_view_projection", light_view_projection);
 		}
 
 		SceneUniforms scene_uniforms{
@@ -1758,7 +2002,7 @@ namespace
 
 	void render(VkCommandBuffer cmd, VkFramebuffer framebuffer)
 	{
-		std::cout << "=== render START ===" << std::endl;
+
 		vkResetCommandBuffer(cmd, 0);
 
 		{ // NOTE: Start recording rendering commands
@@ -1769,134 +2013,25 @@ namespace
 			vkBeginCommandBuffer(cmd, &info);
 		}
 
+		barier_to_Write(shadow_map_layout, cmd);
 		{
-			// Переход shadow map в layout для записи глубины
-			VkImageMemoryBarrier barrier_to_write = {
-				.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER,
-				.srcAccessMask = VK_ACCESS_SHADER_READ_BIT,
-				.dstAccessMask = VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT,
-				.oldLayout = VK_IMAGE_LAYOUT_UNDEFINED,
-				.newLayout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL,
-				.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
-				.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
-				.image = shadow_depth_image,
-				.subresourceRange = {
-					.aspectMask = VK_IMAGE_ASPECT_DEPTH_BIT,
-					.baseMipLevel = 0,
-					.levelCount = 1,
-					.baseArrayLayer = 0,
-					.layerCount = 1,
-				},
-			};
-
-			vkCmdPipelineBarrier(cmd,
-								 VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT,
-								 VK_PIPELINE_STAGE_EARLY_FRAGMENT_TESTS_BIT,
-								 0,
-								 0, nullptr,
-								 0, nullptr,
-								 1, &barrier_to_write);
+			// barier_to_Write(shadow_map_layout, cmd);
 
 			// Dynamic rendering для shadow pass
-			VkRenderingAttachmentInfo depth_attachment{
-				.sType = VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO,
-				.pNext = nullptr, // 👈 ДОБАВИТЬ
-				.imageView = shadow_depth_view,
-				.imageLayout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL,
-				.resolveMode = VK_RESOLVE_MODE_NONE,			 // 👈 ДОБАВИТЬ (для multisampling)
-				.resolveImageView = VK_NULL_HANDLE,				 // 👈 ДОБАВИТЬ
-				.resolveImageLayout = VK_IMAGE_LAYOUT_UNDEFINED, // 👈 ДОБАВИТЬ
-				.loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR,
-				.storeOp = VK_ATTACHMENT_STORE_OP_STORE,
-				.clearValue = {.depthStencil = {1.0f, 0}},
-			};
 
-			VkRenderingInfo rendering_info{
-				.sType = VK_STRUCTURE_TYPE_RENDERING_INFO,
-				.pNext = nullptr, // 👈 ДОБАВИТЬ
-				.flags = 0,		  // 👈 ДОБАВИТЬ
+			VkClearValue clear_value = {.depthStencil = {1.0f, 0}};
+
+			VkRenderPassBeginInfo render_pass_info = {
+				.sType = VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO,
+				.renderPass = shadow_render_pass,
+				.framebuffer = shadow_framebuffer,
 				.renderArea = {{0, 0}, {1024, 1024}},
-				.layerCount = 1,
-				.viewMask = 0, // 👈 ДОБАВИТЬ
-				.colorAttachmentCount = 0,
-				.pColorAttachments = nullptr,
-				.pDepthAttachment = &depth_attachment,
-				.pStencilAttachment = nullptr, // 👈 ДОБАВИТЬ
+				.clearValueCount = 1,
+				.pClearValues = &clear_value,
 			};
-			std::cout << "=== render CONTINUE ===" << std::endl;
 
-			std::cout << "=== DEBUG BEFORE vkCmdBeginRendering ===" << std::endl;
+			vkCmdBeginRenderPass(cmd, &render_pass_info, VK_SUBPASS_CONTENTS_INLINE);
 
-// 1. Отладка depth_attachment
-std::cout << "depth_attachment:" << std::endl;
-std::cout << "  sType: " << depth_attachment.sType << std::endl;
-std::cout << "  pNext: " << depth_attachment.pNext << std::endl;
-std::cout << "  imageView: " << (void*)depth_attachment.imageView << std::endl;
-std::cout << "  imageLayout: " << depth_attachment.imageLayout << std::endl;
-std::cout << "  resolveMode: " << depth_attachment.resolveMode << std::endl;
-std::cout << "  resolveImageView: " << (void*)depth_attachment.resolveImageView << std::endl;
-std::cout << "  resolveImageLayout: " << depth_attachment.resolveImageLayout << std::endl;
-std::cout << "  loadOp: " << depth_attachment.loadOp << std::endl;
-std::cout << "  storeOp: " << depth_attachment.storeOp << std::endl;
-std::cout << "  clearValue.depthStencil.depth: " << depth_attachment.clearValue.depthStencil.depth << std::endl;
-
-// 2. Отладка rendering_info
-std::cout << "rendering_info:" << std::endl;
-std::cout << "  sType: " << rendering_info.sType << std::endl;
-std::cout << "  pNext: " << rendering_info.pNext << std::endl;
-std::cout << "  flags: " << rendering_info.flags << std::endl;
-std::cout << "  renderArea.offset.x: " << rendering_info.renderArea.offset.x << std::endl;
-std::cout << "  renderArea.offset.y: " << rendering_info.renderArea.offset.y << std::endl;
-std::cout << "  renderArea.extent.width: " << rendering_info.renderArea.extent.width << std::endl;
-std::cout << "  renderArea.extent.height: " << rendering_info.renderArea.extent.height << std::endl;
-std::cout << "  layerCount: " << rendering_info.layerCount << std::endl;
-std::cout << "  viewMask: " << rendering_info.viewMask << std::endl;
-std::cout << "  colorAttachmentCount: " << rendering_info.colorAttachmentCount << std::endl;
-std::cout << "  pColorAttachments: " << (void*)rendering_info.pColorAttachments << std::endl;
-std::cout << "  pDepthAttachment: " << (void*)rendering_info.pDepthAttachment << std::endl;
-std::cout << "  pStencilAttachment: " << (void*)rendering_info.pStencilAttachment << std::endl;
-
-// 3. Проверка критических значений
-std::cout << "=== CRITICAL CHECKS ===" << std::endl;
-std::cout << "shadow_depth_view valid: " << (shadow_depth_view != VK_NULL_HANDLE) << std::endl;
-std::cout << "&depth_attachment address: " << (void*)&depth_attachment << std::endl;
-std::cout << "&rendering_info address: " << (void*)&rendering_info << std::endl;
-std::cout << "cmd valid: " << (cmd != VK_NULL_HANDLE) << std::endl;
-
-// 4. Проверка что структуры инициализированы
-if (rendering_info.sType != VK_STRUCTURE_TYPE_RENDERING_INFO) {
-    std::cout << "ERROR: rendering_info.sType is wrong!" << std::endl;
-}
-
-if (depth_attachment.sType != VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO) {
-    std::cout << "ERROR: depth_attachment.sType is wrong!" << std::endl;
-}
-
-// 5. Проверка что функция доступна (если не загружена - будет segfault)
-std::cout << "=== FUNCTION POINTER CHECK ===" << std::endl;
-// Попробовать получить указатель на функцию
-PFN_vkCmdBeginRendering pfn_vkCmdBeginRendering = 
-    (PFN_vkCmdBeginRendering)vkGetDeviceProcAddr(veekay::app.vk_device, "vkCmdBeginRendering");
-    
-if (pfn_vkCmdBeginRendering == nullptr) {
-    std::cout << "CRITICAL ERROR: vkCmdBeginRendering function not available!" << std::endl;
-    std::cout << "Dynamic rendering is NOT supported by this Vulkan device/driver" << std::endl;
-    std::cout << "Skipping shadow pass..." << std::endl;
-    return; // или continue
-} else {
-    std::cout << "vkCmdBeginRendering function pointer: " << (void*)pfn_vkCmdBeginRendering << std::endl;
-}
-
-// 6. Попробовать вызвать через полученный указатель
-std::cout << "=== TRYING vkCmdBeginRendering ===" << std::endl;
-try {
-    pfn_vkCmdBeginRendering(cmd, &rendering_info);
-    std::cout << "SUCCESS: vkCmdBeginRendering executed!" << std::endl;
-} catch (...) {
-    std::cout << "EXCEPTION: vkCmdBeginRendering threw exception!" << std::endl;
-}
-			vkCmdBeginRendering(cmd, &rendering_info);
-			std::cout << "=== render CONTINUE1 ===" << std::endl;
 			// Устанавливаем viewport для shadow pass
 			VkViewport viewport{
 				.x = 0.0f,
@@ -1925,8 +2060,11 @@ try {
 			const size_t model_uniforms_alignment =
 				veekay::graphics::Buffer::structureAlignment(sizeof(ModelUniforms));
 
+			// Нужно как-то передать эту матрицу из update() в render()
+			// Пока используем identity для теста
 			for (size_t i = 0, n = models.size(); i < n; ++i)
 			{
+
 				const Model &model = models[i];
 				const Mesh &mesh = model.mesh;
 
@@ -1942,47 +2080,40 @@ try {
 					vkCmdBindIndexBuffer(cmd, current_index_buffer, zero_offset, VK_INDEX_TYPE_UINT32);
 				}
 
-				veekay::mat4 model_matrix = model.transform.matrix();
+				// Push constants: модель + матрица света
+				struct
+				{
+					veekay::mat4 model;
+					veekay::mat4 light_view_projection;
+				} push_constants;
+
+				veekay::mat4 light_view_projection1 = {
+					1.0f, 0.0f, 0.0f, 0.0f,
+					0.0f, 1.0f, 0.0f, 0.0f,
+					0.0f, 0.0f, 1.0f, 0.0f,
+					0.0f, 0.0f, 0.0f, 1.0f};
+
+				push_constants.model = model.transform.matrix();
+				push_constants.light_view_projection = curr_light_view_projection;
+				// push_constants.light_view_projection = light_view_projection1;
+					//printMatrix("push_constants.light_view_projection Updata", push_constants.light_view_projection);
+				if (i == 0)
+				{ // Только для первого объекта
+					std::cout << "[DEBUG] Light view projection matrix (first row): ";
+					printMatrix("Matr:", push_constants.light_view_projection);
+				}
+
 				vkCmdPushConstants(cmd, shadow_pipeline_layout, VK_SHADER_STAGE_VERTEX_BIT,
-								   0, sizeof(veekay::mat4), &model_matrix);
+								   0, sizeof(push_constants), &push_constants);
 
-				// Привязываем дескрипторы
-				uint32_t offset = i * model_uniforms_alignment;
-				vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, shadow_pipeline_layout,
-										0, 1, &descriptor_set, 1, &offset);
-
+				// Рисуем
 				vkCmdDrawIndexed(cmd, mesh.indices, 1, 0, 0, 0);
 			}
+			vkCmdEndRenderPass(cmd);
 
-			vkCmdEndRendering(cmd);
+			barier_to_Read(shadow_map_layout, cmd);
 
-			// Переход shadow map обратно в layout для чтения в шейдере
-			VkImageMemoryBarrier barrier_to_read = {
-				.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER,
-				.srcAccessMask = VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT,
-				.dstAccessMask = VK_ACCESS_SHADER_READ_BIT,
-				.oldLayout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL,
-				.newLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
-				.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
-				.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
-				.image = shadow_depth_image,
-				.subresourceRange = {
-					.aspectMask = VK_IMAGE_ASPECT_DEPTH_BIT,
-					.baseMipLevel = 0,
-					.levelCount = 1,
-					.baseArrayLayer = 0,
-					.layerCount = 1,
-				},
-			};
-
-			vkCmdPipelineBarrier(cmd,
-								 VK_PIPELINE_STAGE_LATE_FRAGMENT_TESTS_BIT,
-								 VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT,
-								 0,
-								 0, nullptr,
-								 0, nullptr,
-								 1, &barrier_to_read);
-
+			// === 2. Основной рендер ===
 			{
 				VkViewport viewport{
 					.x = 0.0f,
